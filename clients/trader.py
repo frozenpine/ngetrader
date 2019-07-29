@@ -16,8 +16,7 @@ from queue import Queue
 
 from clients.nge_rest import api
 from clients.nge_websocket import NGEWebsocket
-from clients.utils import (condition_controller, condition_waiter,
-                           validate_price)
+from clients.utils import condition_controller, condition_waiter
 
 
 logger = logging.getLogger(__name__)
@@ -40,13 +39,13 @@ class Kline(object):
 
     Command = namedtuple("kline_cmd", ("name", "data"))
 
-    CONTINUOUS = True
+    CONTINUOUS = False
 
     def __init__(self, host, symbol, bar_callback, running):
         self._host = host
         self._symbol = symbol
 
-        self._running = running if running else Event()
+        self._running_flag = running if running else Event()
 
         self._kline_cache = list()
 
@@ -60,6 +59,7 @@ class Kline(object):
 
         self._finished = True
         self._wait_condition = Condition(RLock())
+        self._synchronized = Event()
 
         self._cmd_input = Queue()
         self._callback_cache = {
@@ -68,14 +68,15 @@ class Kline(object):
         }
 
         self._command_tr = Thread(
-            target=self.__background_handler,
-            args=(self._running, self._cmd_input, self._callback_cache))
+            target=self.__command_handler,
+            args=(self._running_flag, self._synchronized,
+                  self._cmd_input, self._callback_cache))
         self._command_tr.daemon = True
         self._command_tr.start()
 
         self._notifier_tr = Thread(
             target=self.__bar_notify_trigger,
-            args=(self._running, self.notify_trade))
+            args=(self._running_flag, self.notify_trade))
         self._notifier_tr.daemon = True
         self._notifier_tr.start()
 
@@ -89,17 +90,20 @@ class Kline(object):
             # assume local timestamp has time gap with server in 3s
             time.sleep(60 - (ts % 60) + 3)
 
-            trade_data = {"timestamp": int(round((ts + 60) * 1000)),
+            trade_data = {"timestamp": int(round(time.time() * 1000)),
                           "price": 0, "size": 0}
             notify_func(trade_data)
+
             logger.debug("sending notify trade data: {}".format(trade_data))
 
     @staticmethod
-    def __background_handler(running: Event, cmd_input: Queue,
-                             callbacks: dict):
+    def __command_handler(running: Event, synced: Event,
+                          cmd_input: Queue, callbacks: dict):
         running.wait()
 
         while running.is_set():
+            synced.wait()
+
             cmd = cmd_input.get()
 
             try:
@@ -126,9 +130,14 @@ class Kline(object):
         return self._symbol
 
     @property
-    @lru_cache(maxsize=1)
-    def kline(self):
+    @condition_waiter(bool_attr="_finished",
+                      condition_attr="_wait_condition")
+    def history(self):
         return tuple(self._kline_cache)
+
+    @property
+    def is_synced(self):
+        return self._synchronized.is_set()
 
     def join(self, timeout=None):
         self._command_tr.join(timeout)
@@ -282,6 +291,8 @@ class Kline(object):
         :raise: ValueError
         """
 
+        self._synchronized.clear()
+
         precise_secs = re.compile(
             r"(?P<duration>\d+)(?P<unit>[mhDW]?)").match(precise).groupdict()
 
@@ -313,11 +324,11 @@ class Kline(object):
         logger.info("using [{}] resolution to request[{}] {}+ candles "
                     "from: {} to: {}".format(precise, url, count,
                                              from_ts, to_ts))
-        rsp = requests.get(url, params={
-            "symbol": self.symbol, "resolution": self._precise_sys,
-            "from": int(round(from_ts.float_timestamp)),
-            "to": int(round(to_ts.float_timestamp))
-        })
+        rsp = lru_cache(maxsize=50)(requests.get)(
+            url,
+            params={"symbol": self.symbol, "resolution": self._precise_sys,
+                    "from": int(round(from_ts.float_timestamp)),
+                    "to": int(round(to_ts.float_timestamp))})
 
         if not rsp.ok:
             raise ValueError(
@@ -376,15 +387,21 @@ class Kline(object):
         if bar_dict["ts"] and bar_dict["ts"] > self._kline_cache[-1].ts:
             self._latest_bar_data = bar_dict
 
-            # this latest bar will be construct by trade tick
-            # to avoid duplicate count of volume, reset volume
-            self._latest_bar_data["volume"] = 0
+        # latest bar is not finished
+        if arrow.now() <= self._latest_bar_data["ts"]:
+            self._latest_bar_data = self._kline_cache[-1].to_dict()
+
+        # latest bar will be construct by trade tick
+        # to avoid duplicate count of volume, reset volume value
+        self._latest_bar_data["volume"] = 0
 
         # merge with exist kline candles
         self._kline_cache = (
             elder_kline[:self.MAX_KLINE_LEN] +
             self._kline_cache[:self.MAX_KLINE_LEN - len(elder_kline)]
         )
+
+        self._synchronized.set()
 
     def notify_trade(self, trade_data):
         self._cmd_input.put(
@@ -402,17 +419,44 @@ class Kline(object):
 
     def __confirm_latest_bar(self):
         with self._wait_condition:
-            if self._latest_bar_data["open"] == 0:
-                self._latest_bar_data["open"] = \
-                    self._latest_bar_data["high"] = \
-                    self._latest_bar_data["low"] = \
-                    self._latest_bar_data["close"] = \
-                    self._kline_cache[-1].close
+            if not self._latest_bar_data["open"]:
+                self._latest_bar_data["open"] = self._kline_cache[-1].close
+            if not self._latest_bar_data["high"]:
+                self._latest_bar_data["high"] = self._kline_cache[-1].close
+            if not self._latest_bar_data["low"]:
+                self._latest_bar_data["low"] = self._kline_cache[-1].close
+            if not self._latest_bar_data["close"]:
+                self._latest_bar_data["close"] = self._kline_cache[-1].close
 
             bar = Bar(**self._latest_bar_data)
             self.__append_bar(bar)
 
             self._latest_bar_data = self.__new_bar_data(pre_bar=bar)
+
+    def __is_in_bar(self, ts: arrow.arrow.Arrow):
+        unit_upgrade_switch = {
+            "minute": 60,
+            "hour": 24,
+            "day": 7
+        }
+
+        unit = self.__unit_keywords(self._precise_unit)
+
+        trade_ts_unit_value = getattr(ts, unit)
+        latest_bar_ts_unit_value = getattr(self._latest_bar_data["ts"], unit)
+
+        if (trade_ts_unit_value < latest_bar_ts_unit_value and
+                trade_ts_unit_value <= self._precise_multiplier):
+            trade_ts_unit_value += unit_upgrade_switch[unit]
+
+        is_in_bar = (trade_ts_unit_value <
+                     latest_bar_ts_unit_value + self._precise_multiplier)
+
+        bar_lag_count = int(round(
+            (trade_ts_unit_value - latest_bar_ts_unit_value) /
+            self._precise_multiplier))
+
+        return is_in_bar, bar_lag_count
 
     @condition_waiter(bool_attr="_finished",
                       condition_attr="_wait_condition")
@@ -420,7 +464,8 @@ class Kline(object):
         if not self._kline_cache:
             self.retrieve_bars(count=20)
 
-        trade_data["timestamp"] = arrow.get(trade_data["timestamp"]/1000)
+        trade_data["timestamp"] = arrow.get(
+            trade_data["timestamp"]/1000).to("local")
 
         if trade_data["timestamp"] < self._latest_bar_data["ts"]:
             logger.debug(
@@ -430,44 +475,42 @@ class Kline(object):
 
             return
 
-        unit = self.__unit_keywords(self._precise_unit)
-        trade_ts_unit_value = getattr(trade_data["timestamp"], unit)
-        latest_bar_ts_unit_value = getattr(self._latest_bar_data["ts"], unit)
+        is_in_bar, lag_bar_count = self.__is_in_bar(trade_data["timestamp"])
 
-        if (trade_ts_unit_value >=
-                latest_bar_ts_unit_value + self._precise_multiplier):
-            lag_bar_count = int(round(
-                (trade_ts_unit_value -
-                 latest_bar_ts_unit_value) / self._precise_multiplier)
-            )
-
+        if not is_in_bar:
             for _ in range(lag_bar_count):
                 self.__confirm_latest_bar()
 
         trade_price = trade_data["price"]
         trade_volume = trade_data["size"]
 
-        # filter out invalid trade price
-        # in general case, this kind trade tick is triggered by bar notifier
-        if not validate_price(trade_price):
-            if not trade_volume:
-                logger.debug(
-                    "invalid trade tick, maybe from bar notifier: {}".format(
-                        trade_data))
-            else:
-                logger.warning(
-                    "invalid trade tick received: {}".format(trade_data))
+        # filter out fake trade tick in 1 minute
+        # to avoid wrong open price
+        if (not trade_price and trade_data["timestamp"].minute ==
+                self._latest_bar_data["ts"].minute):
             return
 
         if not self._latest_bar_data["open"]:
-            self._latest_bar_data["open"] = trade_price
+            trade_price = (trade_price if trade_price else
+                           self._kline_cache[-1].close)
 
-        self._latest_bar_data["high"] = max(
-            self._latest_bar_data["high"], trade_price)
-        self._latest_bar_data["low"] = min(
-            self._latest_bar_data["low"], trade_price)
-        self._latest_bar_data["close"] = trade_price
+            self._latest_bar_data["open"] = trade_price
+            self._latest_bar_data["high"] = max(
+                self._latest_bar_data["high"], trade_price)
+            self._latest_bar_data["low"] = min(
+                self._latest_bar_data["low"], trade_price)
+            self._latest_bar_data["close"] = trade_price
+        elif trade_price:
+            self._latest_bar_data["high"] = max(
+                self._latest_bar_data["high"], trade_price)
+            self._latest_bar_data["low"] = min(
+                self._latest_bar_data["low"], trade_price)
+            self._latest_bar_data["close"] = trade_price
+
         self._latest_bar_data["volume"] += trade_volume
+
+        logger.info("trade tick: {}, latest bar: {}".format(
+            trade_data, self._latest_bar_data))
 
     @condition_waiter(bool_attr="_finished",
                       condition_attr="_wait_condition")
@@ -489,7 +532,7 @@ class Kline(object):
             idx += 1
 
 
-class YBMex(NGEWebsocket):
+class Trader(NGEWebsocket):
     is_test = False
 
     MAX_KLINE_LEN = 1000
@@ -500,25 +543,40 @@ class YBMex(NGEWebsocket):
         self._api_key = api_key
         self._api_secret = api_secret
 
-        self._running = Event()
+        self._running_flag = Event()
 
         self.kline = Kline(host=self._host, symbol=symbol,
-                           bar_callback=self.on_bar, running=self._running)
+                           bar_callback=self.on_bar,
+                           running=self._running_flag)
 
         self._rest_client = api(host=self._host,
                                 api_key=self._api_key,
                                 api_secret=self._api_secret)
 
-        super(YBMex, self).__init__(host=self._host,
-                                    symbol=symbol,
-                                    api_key=self._api_key,
-                                    api_secret=self._api_secret)
-        self._running.set()
+        super(Trader, self).__init__(host=self._host,
+                                     symbol=symbol,
+                                     api_key=self._api_key,
+                                     api_secret=self._api_secret)
+        self.running = True
+
+    @property
+    def running(self):
+        return self._running_flag.is_set()
+
+    @running.setter
+    def running(self, value):
+        if value:
+            self._running_flag.set()
+        else:
+            self._running_flag.clear()
 
     def exit(self):
-        super(YBMex, self).exit()
+        super(Trader, self).exit()
 
-        self._running.clear()
+        self._running_flag.clear()
+
+    def join(self):
+        self.wst.join()
 
     def on_tick(self, tick_data):
         pass
@@ -530,14 +588,14 @@ class YBMex(NGEWebsocket):
         pprint(bar)
 
     def partial_handler(self, table_name, message):
-        super(YBMex, self).partial_handler(table_name, message)
+        super(Trader, self).partial_handler(table_name, message)
 
         if table_name == "trade":
-            for trade in message["data"]:
+            for trade in self.recent_trades():
                 self.kline.notify_trade(trade)
 
     def insert_handler(self, table_name, message):
-        super(YBMex, self).insert_handler(table_name, message)
+        super(Trader, self).insert_handler(table_name, message)
 
         if table_name == "trade":
             for trade in message["data"]:
@@ -547,14 +605,14 @@ class YBMex(NGEWebsocket):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    # from os import environ
-    # environ["http_proxy"] = "http://127.0.0.1:1080"
+    from os import environ
+    environ["http_proxy"] = "http://127.0.0.1:1080"
     # environ["https_proxy"] = "http://127.0.0.1:7890"
-    # ybmex = YBMex(host="https://www.bitmex.com")
-    # ybmex.kline.retrieve_bars(endpoint="/api/udf/history",
-    #                        mode="last", trigger=True)
+    # bitmex = Trader(host="https://www.bitmex.com")
+    # bitmex.kline.retrieve_bars(endpoint="/api/udf/history",
+    #                            mode="last", trigger=True)
 
-    ybmex = YBMex()
+    ybmex = Trader()
     # ybmex.kline.retrieve_bars(
     #     precise="5", count=100,
     #     to_ts=arrow.now().shift(minutes=-100), trigger=True)
@@ -563,9 +621,11 @@ if __name__ == "__main__":
     #     to_ts=arrow.now().shift(minutes=-100))
     #
     # print("total {} candle retrieved.".format(len(ybmex.kline)))
-    pprint(ybmex.kline.latest_bar_data)
+    # pprint(ybmex.kline.latest_bar_data)
+
+    ybmex.kline.retrieve_bars()
 
     for _bar in ybmex.kline:
         pprint(_bar)
 
-    ybmex.kline.join()
+    ybmex.join()

@@ -31,6 +31,10 @@ def validate_price(price):
     return price != 0
 
 
+def validate_volume(volume):
+    return volume > 0
+
+
 def condition_controller(bool_attr: str, condition_attr: str):
     def controller(func):
         @wraps(func)
