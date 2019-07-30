@@ -9,15 +9,10 @@ import time
 
 from urllib.parse import urlparse, urlunparse
 from collections import namedtuple, OrderedDict
-from functools import lru_cache
 from threading import Condition, RLock, Thread, Event
-from pprint import pprint
 from queue import Queue
 
-from clients.nge_rest import api
-from clients.nge_websocket import NGEWebsocket
 from clients.utils import condition_controller, condition_waiter
-
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +35,8 @@ class Kline(object):
     Command = namedtuple("kline_cmd", ("name", "data"))
 
     CONTINUOUS = False
+
+    BAR_DELAY = 3
 
     def __init__(self, host, symbol, bar_callback, running):
         self._host = host
@@ -87,8 +84,8 @@ class Kline(object):
         while running.is_set():
             ts = time.time()
 
-            # assume local timestamp has time gap with server in 3s
-            time.sleep(60 - (ts % 60) + 3)
+            # assume local timestamp has time gap with server
+            time.sleep(60 - (ts % 60) + Kline.BAR_DELAY)
 
             trade_data = {"timestamp": int(round(time.time() * 1000)),
                           "price": 0, "size": 0}
@@ -324,7 +321,7 @@ class Kline(object):
         logger.info("using [{}] resolution to request[{}] {}+ candles "
                     "from: {} to: {}".format(precise, url, count,
                                              from_ts, to_ts))
-        rsp = lru_cache(maxsize=50)(requests.get)(
+        rsp = requests.get(
             url,
             params={"symbol": self.symbol, "resolution": self._precise_sys,
                     "from": int(round(from_ts.float_timestamp)),
@@ -445,8 +442,7 @@ class Kline(object):
         trade_ts_unit_value = getattr(ts, unit)
         latest_bar_ts_unit_value = getattr(self._latest_bar_data["ts"], unit)
 
-        if (trade_ts_unit_value < latest_bar_ts_unit_value and
-                trade_ts_unit_value <= self._precise_multiplier):
+        if trade_ts_unit_value < latest_bar_ts_unit_value:
             trade_ts_unit_value += unit_upgrade_switch[unit]
 
         is_in_bar = (trade_ts_unit_value <
@@ -530,102 +526,3 @@ class Kline(object):
                 yield self._kline_cache[idx]
 
             idx += 1
-
-
-class Trader(NGEWebsocket):
-    is_test = False
-
-    MAX_KLINE_LEN = 1000
-
-    def __init__(self, host="https://www.ybmex.com",
-                 symbol="XBTUSD", api_key="", api_secret=""):
-        self._host = host
-        self._api_key = api_key
-        self._api_secret = api_secret
-
-        self._running_flag = Event()
-
-        self.kline = Kline(host=self._host, symbol=symbol,
-                           bar_callback=self.on_bar,
-                           running=self._running_flag)
-
-        self._rest_client = api(host=self._host,
-                                api_key=self._api_key,
-                                api_secret=self._api_secret)
-
-        super(Trader, self).__init__(host=self._host,
-                                     symbol=symbol,
-                                     api_key=self._api_key,
-                                     api_secret=self._api_secret)
-        self.running = True
-
-    @property
-    def running(self):
-        return self._running_flag.is_set()
-
-    @running.setter
-    def running(self, value):
-        if value:
-            self._running_flag.set()
-        else:
-            self._running_flag.clear()
-
-    def exit(self):
-        super(Trader, self).exit()
-
-        self._running_flag.clear()
-
-    def join(self):
-        self.wst.join()
-
-    def on_tick(self, tick_data):
-        pass
-
-    def on_trade(self, trade_data):
-        pass
-
-    def on_bar(self, bar: Bar):
-        pprint(bar)
-
-    def partial_handler(self, table_name, message):
-        super(Trader, self).partial_handler(table_name, message)
-
-        if table_name == "trade":
-            for trade in self.recent_trades():
-                self.kline.notify_trade(trade)
-
-    def insert_handler(self, table_name, message):
-        super(Trader, self).insert_handler(table_name, message)
-
-        if table_name == "trade":
-            for trade in message["data"]:
-                self.kline.notify_trade(trade)
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    from os import environ
-    environ["http_proxy"] = "http://127.0.0.1:1080"
-    # environ["https_proxy"] = "http://127.0.0.1:7890"
-    # bitmex = Trader(host="https://www.bitmex.com")
-    # bitmex.kline.retrieve_bars(endpoint="/api/udf/history",
-    #                            mode="last", trigger=True)
-
-    ybmex = Trader()
-    # ybmex.kline.retrieve_bars(
-    #     precise="5", count=100,
-    #     to_ts=arrow.now().shift(minutes=-100), trigger=True)
-    # ybmex.kline.retrieve_bars(
-    #     precise="5", count=100,
-    #     to_ts=arrow.now().shift(minutes=-100))
-    #
-    # print("total {} candle retrieved.".format(len(ybmex.kline)))
-    # pprint(ybmex.kline.latest_bar_data)
-
-    ybmex.kline.retrieve_bars()
-
-    for _bar in ybmex.kline:
-        pprint(_bar)
-
-    ybmex.join()

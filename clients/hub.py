@@ -6,7 +6,7 @@ from bravado.http_future import HttpFuture
 from gevent.threading import Lock
 from gevent.lock import BoundedSemaphore
 
-from .nge_rest import api
+from clients.nge_rest import api
 
 
 class NGEClientPool(object):

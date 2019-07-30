@@ -19,6 +19,10 @@ numpy==1.16.4
 pyasn1==0.4.5
 pycparser==2.19
 pycryptodome==3.8.2
+PyQt5==5.13.0
+PyQt5-sip==4.19.18
+PyQt5-stubs==5.13.0.1
+PyQtChart==5.13.0
 pyrsistent==0.15.3
 PySocks==1.7.0
 python-dateutil==2.8.0

@@ -163,14 +163,11 @@ if __name__ == "__main__":
     host_addr = "test.365mex.com"
     host_port = 80
 
-    from clients.sso import User
-
-    user = User(host=(host_addr, host_port))
-    user.login(identity="sonny.frozenpine@gmail.com", password="Aa123456")
-    user.get_api_key()
+    api_key = ""
+    api_secret = ""
 
     client = api(host="http://{}".format(host_addr),
-                 api_key=user.api_key, api_secret=user.api_secret)
+                 api_key=api_key, api_secret=api_secret)
 
     result = client.Position.Position_get().result()
 

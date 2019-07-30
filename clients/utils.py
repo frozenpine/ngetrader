@@ -2,6 +2,7 @@
 
 import hmac
 import hashlib
+import requests
 
 from time import time
 from functools import wraps
@@ -33,6 +34,19 @@ def validate_price(price):
 
 def validate_volume(volume):
     return volume > 0
+
+
+def http_request(uri, method="POST", session=None, **kwargs):
+    if not session:
+        session = requests.Session()
+
+    response = getattr(session, method.lower())(
+        uri, **kwargs)
+
+    if not response.ok:
+        raise requests.HTTPError(response.text)
+
+    return response
 
 
 def condition_controller(bool_attr: str, condition_attr: str):

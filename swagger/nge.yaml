@@ -967,7 +967,7 @@ paths:
     get:
       tags:
       - Instrument
-      summary: Return all active contract series and interval pairs.
+      summary: Return all active contract kline_series and interval pairs.
       description: This endpoint is useful for determining which pairs are live. It
         returns two arrays of   strings. The first is intervals, such as `["XBT:perpetual",
         "XBT:monthly", "XBT:quarterly", "ETH:monthly", ...]`. These identifiers are
@@ -2073,8 +2073,8 @@ paths:
       parameters:
       - name: symbol
         in: query
-        description: Instrument symbol. Send a series (e.g. XBT) to get user for the
-          nearest contract in that series.
+        description: Instrument symbol. Send a kline_series (e.g. XBT) to get user for the
+          nearest contract in that kline_series.
         required: true
         type: string
       - name: depth
@@ -2711,7 +2711,7 @@ paths:
     get:
       tags:
       - Stats
-      summary: Get exchange-wide and per-series turnover and volume statistics.
+      summary: Get exchange-wide and per-kline_series turnover and volume statistics.
       operationId: Stats.get
       parameters: []
       responses:
@@ -2743,7 +2743,7 @@ paths:
     get:
       tags:
       - Stats
-      summary: Get historical exchange-wide and per-series turnover and volume statistics.
+      summary: Get historical exchange-wide and per-kline_series turnover and volume statistics.
       operationId: Stats.history
       parameters: []
       responses:

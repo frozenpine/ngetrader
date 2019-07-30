@@ -391,16 +391,3 @@ def get_env_bool(name):
 
 def get_env_string(name, default=''):
     return os.environ.get(name, default)
-
-
-def http_request(uri, method="POST", session=None, **kwargs):
-    if not session:
-        session = requests.Session()
-
-    response = getattr(session, method.lower())(
-        uri, **kwargs)
-
-    if not response.ok:
-        raise requests.HTTPError(response.text)
-
-    return response
