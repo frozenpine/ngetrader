@@ -1,4 +1,6 @@
 # coding: utf-8
+import time
+
 from pprint import pprint
 from collections import defaultdict, OrderedDict
 
@@ -64,8 +66,10 @@ class Trader(NGEWebsocket):
 
     def join(self):
         while self.running:
-            if self.wst:
+            if self.wst and self.wst.is_alive():
                 self.wst.join()
+            else:
+                time.sleep(0.5)
 
     def on_tick(self, tick_data):
         pass
@@ -99,17 +103,46 @@ class Trader(NGEWebsocket):
         if table_name == "trade":
             for trade_data in message["data"]:
                 # sequence can not be revered
-                self.on_trade(trade_data=trade_data)
+                try:
+                    self.on_trade(trade_data=trade_data)
+                except Exception as e:
+                    self.logger.exception(e)
 
                 self.kline.notify_trade(trade_data)
 
         if table_name == "order":
             for order_data in message["data"]:
-                self.on_rtn_order(order_data)
+                try:
+                    self.on_rtn_order(order_data)
+                except Exception as e:
+                    self.logger.exception(e)
 
         if table_name == "execution":
             for exe in message["data"]:
-                self.on_rtn_trade(exe)
+                try:
+                    self.on_rtn_trade(exe)
+                except Exception as e:
+                    self.logger.exception(e)
+
+    def _update_handler(self, table_name, message):
+        super(Trader, self)._update_handler(table_name, message)
+
+        if table_name == "order":
+            for order_data in message["data"]:
+                try:
+                    self.on_rtn_order(order_data)
+                except Exception as e:
+                    self.logger.exception(e)
+
+        if table_name == "execution":
+            for exe in message["data"]:
+                try:
+                    self.on_rtn_trade(exe)
+                except Exception as e:
+                    self.logger.exception(e)
+
+    def __getattr__(self, item):
+        return getattr(self._rest_client, item)
 
 
 if __name__ == "__main__":

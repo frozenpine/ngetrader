@@ -60,7 +60,6 @@ info:
     email: support@bitmex.com
   version: 1.2.0
 basePath: "/api/v1"
-host: "test.365mex.com"
 paths:
   "/announcement":
     get:

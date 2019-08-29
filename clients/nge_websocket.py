@@ -17,6 +17,8 @@ class NGEWebsocket(object):
     # Don't grow a table larger than this amount. Helps cap memory usage.
     MAX_TABLE_LEN = 200
 
+    BITMEX_COMPATIABLE = False
+
     def __init__(self, host, symbol, api_key=None, api_secret=None):
         """
         Connect to the websocket and initialize data stores.
@@ -77,7 +79,10 @@ class NGEWebsocket(object):
                 self.ws.close()
 
             if self.wst and self.wst.is_alive():
-                self.wst.join()
+                try:
+                    self.wst.join()
+                except RuntimeError:
+                    pass
 
     def get_instrument(self):
         """
@@ -162,7 +167,7 @@ class NGEWebsocket(object):
 
         # Limit the max length of the table to avoid excessive memory usage.
         # Don't trim orders because we'll lose valuable state if we do.
-        if table_name not in ['order', 'orderBookL2', "trade"] and len(
+        if table_name not in ('order', 'orderBookL2', "trade") and len(
                 self.data[table_name]) > NGEWebsocket.MAX_TABLE_LEN:
             self.data[table_name] = self.data[table_name][int(
                 NGEWebsocket.MAX_TABLE_LEN / 2):]
@@ -212,7 +217,9 @@ class NGEWebsocket(object):
 
         # Wait for connect before continuing
         conn_timeout = 5
-        while not self.ws.sock or not self.ws.sock.connected and conn_timeout:
+        while (not self.ws.sock or
+               not self.ws.sock.connected and
+               conn_timeout <= 0):
             sleep(1)
             conn_timeout -= 1
         if not conn_timeout:
@@ -263,10 +270,12 @@ class NGEWebsocket(object):
         # the WS API endpoint.
         nonce = generate_nonce()
         return [
-            "api-nonce: " + str(nonce),
+            "api-expires: " + str(nonce),
             "api-signature: " + generate_signature(
-                self._api_secret, 'GET', '/realtime', nonce, ''),
-            "api-key:" + self._api_key
+                self._api_secret, 'GET',
+                '/realtime' if self.BITMEX_COMPATIABLE else '/api/v1/signature',
+                nonce, ''),
+            "api-key: " + self._api_key
         ]
 
     def __get_url(self):
@@ -281,10 +290,13 @@ class NGEWebsocket(object):
         # 10 levels & save bandwidth
         symbol_subs = ["instrument", "orderBookL2", "trade", "quote"]
         if self.has_authorization:
-            symbol_subs += ["execution", "order", "position"]
+            symbol_subs += [
+                "execution", "order",
+                "position"] if self.BITMEX_COMPATIABLE else ["order"]
         subscriptions = [sub + ':' + self.symbol for sub in symbol_subs]
 
-        generic_subs = ["margin"]
+        generic_subs = ["margin"] if self.BITMEX_COMPATIABLE else [
+            "execution", "position", "margin"]
         if self.has_authorization:
             subscriptions += generic_subs
 
@@ -300,8 +312,17 @@ class NGEWebsocket(object):
         :return:
         """
         # Wait for the keys to show up from the ws
-        while not {'margin', 'position', 'order', 'orderBookL2'} <= set(
-                self.data):
+        wait_tables = {'margin', 'order', 'position'}
+
+        while True:
+            retrieved_account = wait_tables & set(self.data)
+
+            if len(retrieved_account) == len(wait_tables):
+                break
+
+            self.logger.debug(
+                "Account table retrieved: {}".format(retrieved_account))
+
             sleep(0.1)
 
     def __wait_for_symbol(self, symbol):
@@ -310,7 +331,17 @@ class NGEWebsocket(object):
         :param symbol:
         :return:
         """
-        while not {'instrument', 'trade', 'quote'} <= set(self.data):
+        wait_tables = {'instrument', 'trade', 'quote', 'orderBookL2'}
+
+        while True:
+            retrieved_symbols = wait_tables & set(self.data)
+
+            if len(retrieved_symbols) == len(wait_tables):
+                break
+
+            self.logger.debug(
+                "Symbol table retrieved: {}".format(retrieved_symbols))
+
             sleep(0.1)
 
     def __send_command(self, command, args=None):
