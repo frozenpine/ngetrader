@@ -6,11 +6,10 @@ import threading
 import json
 
 from time import sleep
+from threading import Event
 from urllib.parse import urlparse, urlunparse
 
 from clients.utils import generate_nonce, generate_signature
-
-logger = logging.getLogger(__name__)
 
 
 # noinspection PyUnusedLocal
@@ -26,7 +25,9 @@ class NGEWebsocket(object):
         :param api_key:
         :param api_secret:
         """
-        logger.debug("Initializing WebSocket.")
+        self.logger = logging.getLogger(__name__)
+
+        self.logger.debug("Initializing WebSocket.")
 
         self.endpoint = host
         self.symbol = symbol
@@ -41,21 +42,7 @@ class NGEWebsocket(object):
 
         self.data = dict()
         self.keys = dict()
-        self.exited = False
-
-        # We can subscribe right in the connection querystring, so let's
-        # build that.
-        # Subscribe to all pertinent endpoints
-        ws_url = self.__get_url()
-        logger.info("Connecting to %s" % ws_url)
-        self.__connect(ws_url, symbol)
-        logger.info('Connected to WS.')
-
-        # Connected. Wait for partials
-        self.__wait_for_symbol(symbol)
-        if api_key:
-            self.__wait_for_account()
-        logger.info('Got all market data. Starting.')
+        self._running_flag = Event()
 
     @property
     def has_authorization(self):
@@ -64,14 +51,33 @@ class NGEWebsocket(object):
 
         return False
 
-    def exit(self):
-        """
-        Call this to exit - will close websocket.
-        :return:
-        """
+    @property
+    def running(self):
+        return self._running_flag.is_set()
 
-        self.exited = True
-        self.ws.close()
+    @running.setter
+    def running(self, value):
+        if value:
+            self._running_flag.set()
+            ws_url = self.__get_url()
+            self.logger.info("Connecting to %s" % ws_url)
+            self.__connect(ws_url)
+            self.logger.info('Connected to WS.')
+
+            # Connected. Wait for partials
+            self.__wait_for_symbol(self.symbol)
+            if self._api_key:
+                self.__wait_for_account()
+
+            self.logger.info('Got all market data. Starting.')
+        else:
+            self._running_flag.clear()
+
+            if self.ws:
+                self.ws.close()
+
+            if self.wst and self.wst.is_alive():
+                self.wst.join()
 
     def get_instrument(self):
         """
@@ -139,8 +145,8 @@ class NGEWebsocket(object):
         """
         return self.data['trade']
 
-    def partial_handler(self, table_name, message):
-        logger.debug("%s: partial" % table_name)
+    def _partial_handler(self, table_name, message):
+        self.logger.debug("%s: partial" % table_name)
 
         self.data[table_name] = message['data']
         # Keys are communicated on partials to let you know how
@@ -148,8 +154,8 @@ class NGEWebsocket(object):
         # an item. We use it for updates.
         self.keys[table_name] = message['keys']
 
-    def insert_handler(self, table_name, message):
-        logger.debug(
+    def _insert_handler(self, table_name, message):
+        self.logger.debug(
             '%s: inserting %s' % (table_name, message['data']))
 
         self.data[table_name] += message['data']
@@ -161,8 +167,8 @@ class NGEWebsocket(object):
             self.data[table_name] = self.data[table_name][int(
                 NGEWebsocket.MAX_TABLE_LEN / 2):]
 
-    def update_handler(self, table_name, message):
-        logger.debug(
+    def _update_handler(self, table_name, message):
+        self.logger.debug(
             '%s: updating %s' % (table_name, message['data']))
 
         # Locate the item in the collection and update it.
@@ -177,8 +183,8 @@ class NGEWebsocket(object):
             if table_name == 'order' and item['leavesQty'] <= 0:
                 self.data[table_name].remove(item)
 
-    def delete_handler(self, table_name, message):
-        logger.debug(
+    def _delete_handler(self, table_name, message):
+        self.logger.debug(
             '%s: deleting %s' % (table_name, message['data']))
 
         # Locate the item in the collection and remove it.
@@ -187,16 +193,11 @@ class NGEWebsocket(object):
                                      self.data[table_name], deleteData)
             self.data[table_name].remove(item)
 
-    def __connect(self, ws_url, symbol):
-        """
-        Connect to the websocket in a thread.
-        :param ws_url:
-        :param symbol:
-        :return:
+    def __connect(self, ws_url):
+        """Connect to the websocket in a thread.
         """
 
-        logger.debug("Starting thread")
-
+        self.logger.debug("Starting thread")
         self.ws = websocket.WebSocketApp(ws_url,
                                          on_message=self.__on_message,
                                          on_close=self.__on_close,
@@ -207,7 +208,7 @@ class NGEWebsocket(object):
         self.wst = threading.Thread(target=lambda: self.ws.run_forever())
         self.wst.daemon = True
         self.wst.start()
-        logger.debug("Started thread")
+        self.logger.debug("Started thread")
 
         # Wait for connect before continuing
         conn_timeout = 5
@@ -215,10 +216,37 @@ class NGEWebsocket(object):
             sleep(1)
             conn_timeout -= 1
         if not conn_timeout:
-            logger.error("Couldn't connect to WS! Exiting.")
-            self.exit()
+            self.logger.error("Couldn't connect to WS! Exiting.")
+            self.running = False
             raise websocket.WebSocketTimeoutException(
                 "Could not connect to WS! Exiting.")
+
+    def __reconnect(self):
+        self.data = dict()
+        self.keys = dict()
+
+        ws_url = self.__get_url()
+        self.logger.info("ReConnecting to %s" % ws_url)
+
+        while self.running:
+            try:
+                self.__connect(ws_url)
+            except websocket.WebSocketException:
+                # todo: 随机回退算法进行递增延时重连
+                delay = 5
+                self.logger.info(
+                    "Delay {}s to retry connecting.".format(delay))
+                sleep(delay)
+            else:
+                break
+
+        self.logger.info('ReConnected to WS.')
+
+        # Connected. Wait for partials
+        self.__wait_for_symbol(self.symbol)
+        if self._api_key:
+            self.__wait_for_account()
+        self.logger.info('Got all market data. Starting.')
 
     def __get_auth(self):
         """
@@ -226,10 +254,10 @@ class NGEWebsocket(object):
         :return:
         """
         if not self.has_authorization:
-            logger.info("Not authenticating.")
+            self.logger.info("Not authenticating.")
             return []
 
-        logger.info("Authenticating with API Key.")
+        self.logger.info("Authenticating with API Key.")
         # To auth to the WS using an API key, we generate a signature of
         # a nonce and
         # the WS API endpoint.
@@ -306,12 +334,12 @@ class NGEWebsocket(object):
         try:
             message = json.loads(message)
         except ValueError as e:
-            logger.warning(
+            self.logger.warning(
                 "parse message failed: {}\n{}".format(e, message))
             return
 
         if 'subscribe' in message:
-            logger.debug("Subscribed to %s." % message['subscribe'])
+            self.logger.debug("Subscribed to %s." % message['subscribe'])
             return
 
         table = message.get('table')
@@ -326,22 +354,22 @@ class NGEWebsocket(object):
         # 'update'  - update row
         # 'delete'  - delete row
         action_switch = {
-            "partial": self.partial_handler,
-            "insert": self.insert_handler,
-            "update": self.update_handler,
-            "delete": self.delete_handler
+            "partial": self._partial_handler,
+            "insert": self._insert_handler,
+            "update": self._update_handler,
+            "delete": self._delete_handler
         }
 
         try:
             action_func = action_switch[action]
         except KeyError as e:
-            logger.error("Unknown action: %s" % action)
+            self.logger.error("Unknown action: %s" % action)
             return
 
         try:
             action_func(table, message)
         except Exception as e:
-            logger.exception(e)
+            self.logger.exception(e)
 
     def __on_error(self, error):
         """
@@ -349,26 +377,25 @@ class NGEWebsocket(object):
         :param error:
         :return:
         """
-        if not self.exited:
-            logger.error("Error : %s" % error)
+        if not self.running:
+            self.logger.error("Error : %s" % error)
 
-            self.exit()
-
-    # noinspection PyMethodMayBeStatic
     def __on_open(self):
         """
         Called when the WS opens.
         :return:
         """
-        logger.debug("Websocket Opened.")
+        self.logger.debug("Websocket Opened.")
 
-    # noinspection PyMethodMayBeStatic
     def __on_close(self):
         """
         Called on websocket close.
         :return:
         """
-        logger.info('Websocket Closed')
+        self.logger.info('Websocket Closed')
+
+        if self.running:
+            self.__reconnect()
 
 
 # Utility method for finding an item in the store.

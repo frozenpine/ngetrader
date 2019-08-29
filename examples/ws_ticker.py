@@ -29,10 +29,10 @@ class MarketTicker(NGEWebsocket):
     link_latency = 0
     timestamp_fix = 0
 
-    def insert_handler(self, table_name, message):
+    def _insert_handler(self, table_name, message):
         receive_timestamp = time() * 1000
 
-        super(MarketTicker, self).insert_handler(table_name, message)
+        super(MarketTicker, self)._insert_handler(table_name, message)
 
         if table_name != "trade":
             return

@@ -84,7 +84,7 @@ def guid_deserializer(guid_string):
         return guid_string
 
 
-def api(host="https://www.ybmex.com", config=None, api_key=None,
+def api(host="https://www.btcmex.com", config=None, api_key=None,
         api_secret=None):
     """
     Factory method to get NGE swagger client.

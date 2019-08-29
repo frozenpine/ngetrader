@@ -210,7 +210,7 @@ class MBL(object):
 
         return switch[self._direction]()
 
-    def __get_counterparty(self):
+    def __get_counter_party(self):
         return self._orderbook[self._direction.flap()]
 
     @property

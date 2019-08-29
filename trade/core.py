@@ -1,5 +1,4 @@
 # coding: utf-8
-from threading import Event
 from pprint import pprint
 from collections import defaultdict, OrderedDict
 
@@ -14,17 +13,11 @@ class Trader(NGEWebsocket):
 
     MAX_KLINE_LEN = 1000
 
-    def __init__(self, host="https://www.ybmex.com",
+    def __init__(self, host="https://www.btcmex.com",
                  symbol="XBTUSD", api_key="", api_secret=""):
         self._host = host
         self._api_key = api_key
         self._api_secret = api_secret
-
-        self._running_flag = Event()
-
-        self.kline = Kline(host=self._host, symbol=symbol,
-                           bar_callback=self.on_bar,
-                           running=self._running_flag)
 
         self._order_cache = defaultdict(OrderedDict)
 
@@ -36,26 +29,43 @@ class Trader(NGEWebsocket):
                                      symbol=symbol,
                                      api_key=self._api_key,
                                      api_secret=self._api_secret)
+
+        self.kline = Kline(host=self._host, symbol=symbol,
+                           bar_callback=self.on_bar,
+                           running=self._running_flag)
+
         self.running = True
 
     @property
-    def running(self):
-        return self._running_flag.is_set()
+    def buy_side(self):
+        buy_side = [o for o in self.data["orderBookL2"] if o["side"] == "Buy"]
+        buy_side.sort(key=lambda o: o["price"], reverse=True)
 
-    @running.setter
-    def running(self, value):
-        if value:
-            self._running_flag.set()
-        else:
-            self._running_flag.clear()
+        return buy_side
 
-    def exit(self):
-        super(Trader, self).exit()
+    @property
+    def best_buy(self):
+        return self.buy_side[0]
 
-        self.running = False
+    @property
+    def sell_side(self):
+        sell_side = [o for o in self.data["orderBookL2"] if o["side"] == "Sell"]
+        sell_side.sort(key=lambda o: o["price"])
+
+        return sell_side
+
+    @property
+    def best_sell(self):
+        return self.sell_side[0]
+
+    @property
+    def best_quote(self):
+        return self.best_sell, self.best_buy
 
     def join(self):
-        self.wst.join()
+        while self.running:
+            if self.wst:
+                self.wst.join()
 
     def on_tick(self, tick_data):
         pass
@@ -76,16 +86,33 @@ class Trader(NGEWebsocket):
     def on_rtn_trade(self, trade):
         pass
 
-    def partial_handler(self, table_name, message):
-        super(Trader, self).partial_handler(table_name, message)
+    def _partial_handler(self, table_name, message):
+        super(Trader, self)._partial_handler(table_name, message)
 
         if table_name == "trade":
-            for trade in self.recent_trades():
-                self.kline.notify_trade(trade)
+            for trade_data in self.recent_trades():
+                self.kline.notify_trade(trade_data)
 
-    def insert_handler(self, table_name, message):
-        super(Trader, self).insert_handler(table_name, message)
+    def _insert_handler(self, table_name, message):
+        super(Trader, self)._insert_handler(table_name, message)
 
         if table_name == "trade":
-            for trade in message["data"]:
-                self.kline.notify_trade(trade)
+            for trade_data in message["data"]:
+                # sequence can not be revered
+                self.on_trade(trade_data=trade_data)
+
+                self.kline.notify_trade(trade_data)
+
+        if table_name == "order":
+            for order_data in message["data"]:
+                self.on_rtn_order(order_data)
+
+        if table_name == "execution":
+            for exe in message["data"]:
+                self.on_rtn_trade(exe)
+
+
+if __name__ == "__main__":
+    ybmex = Trader()
+
+    pprint(ybmex.best_quote)

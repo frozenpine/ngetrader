@@ -36,7 +36,7 @@ class Kline(object):
 
     CONTINUOUS = False
 
-    BAR_DELAY = 3
+    BAR_DELAY = 0.01
 
     def __init__(self, host, symbol, bar_callback, running):
         self._host = host
@@ -454,14 +454,25 @@ class Kline(object):
 
         return is_in_bar, bar_lag_count
 
+    def is_same_bar_tick(self, trade_data):
+        if not self._latest_bar_data:
+            return False
+
+        return self.__is_in_bar(
+            arrow.get(trade_data["timestamp"]/1000).to("local"))
+
     @condition_waiter(bool_attr="_finished",
                       condition_attr="_wait_condition")
     def __trade_handler(self, trade_data):
         if not self._kline_cache:
             self.retrieve_bars(count=20)
 
-        trade_data["timestamp"] = arrow.get(
-            trade_data["timestamp"]/1000).to("local")
+        if isinstance(trade_data["timestamp"], int):
+            trade_data["timestamp"] = arrow.get(
+                trade_data["timestamp"]/1000).to("local")
+        else:
+            trade_data["timestamp"] = arrow.get(
+                trade_data["timestamp"]).to("local")
 
         if trade_data["timestamp"] < self._latest_bar_data["ts"]:
             logger.debug(
@@ -505,7 +516,7 @@ class Kline(object):
 
         self._latest_bar_data["volume"] += trade_volume
 
-        logger.info("trade tick: {}, latest bar: {}".format(
+        logger.debug("trade tick: {}, latest bar: {}".format(
             trade_data, self._latest_bar_data))
 
     @condition_waiter(bool_attr="_finished",

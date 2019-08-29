@@ -9,8 +9,8 @@ from trade.core import Trader
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    from os import environ
-    environ["http_proxy"] = "http://127.0.0.1:1080"
+    # from os import environ
+    # environ["http_proxy"] = "http://127.0.0.1:1080"
     # environ["https_proxy"] = "http://127.0.0.1:7890"
     # bitmex = Trader(host="https://www.bitmex.com")
     # bitmex.kline.retrieve_bars(endpoint="/api/udf/history",
