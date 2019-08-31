@@ -80,8 +80,11 @@ class Data(object):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self):
+    def __init__(self, rec_obj_mixin=None):
         self._record_obj = object
+        self._record_obj_mixin = [NamedTupleDictDataMixin] + (
+            list(rec_obj_mixin) if rec_obj_mixin else []
+        )
         self.column_headers = list()
         self.records = list()
         self.line_count = 0
@@ -115,6 +118,9 @@ class Data(object):
         :return:
         """
         pass
+
+    def __iter__(self):
+        return iter(self.records)
 
 
 class CatalogedMixin(object):
@@ -163,8 +169,10 @@ class CSVData(Data):
     """
 
     def __init__(self, filename, ignore_invalid=False, splitter=',',
-                 nan_columns=None, filter_func=None):
-        Data.__init__(self)
+                 nan_columns=None, filter_func=None,
+                 rec_obj_mixin=None):
+        Data.__init__(self, rec_obj_mixin=rec_obj_mixin)
+
         self._nan_columns = nan_columns
         self._file_path = filename
         self._ignore_invalid = ignore_invalid
@@ -205,7 +213,10 @@ class CSVData(Data):
     def _parse_column(cols, col_defines, nan_columns=None):
         if col_defines:
             for idx, func in col_defines:
-                cols[idx] = func(cols[idx])
+                try:
+                    cols[idx] = func(cols[idx])
+                except Exception:
+                    pass
 
             return
 
@@ -261,10 +272,12 @@ class CSVData(Data):
                     values[idx] = values[idx].decode('utf-8')
                 except UnicodeDecodeError:
                     values[idx] = values[idx].decode('gbk')
+                except AttributeError:
+                    pass
             return values
 
         col_defines = []
-        with open(filename) as file_stream:
+        with open(filename, encoding="utf-8") as file_stream:
             csv_file = csv.reader(file_stream, delimiter=splitter)
             if has_head:
                 headers = next(csv_file)
@@ -303,7 +316,7 @@ class CSVData(Data):
                     str(file_name),
                     (namedtuple(file_name + '_records',
                                 self.column_headers),
-                     NamedTupleDictDataMixin),
+                     *self._record_obj_mixin),
                     dict())
 
                 continue
@@ -363,11 +376,12 @@ class MySqlData(Data):
         r'`?(?P<table_name>[a-zA-Z0-9_$]+)`? *.*;?',
         re.IGNORECASE)
 
-    def __init__(self, mysql_config, sql, *sql_params):
+    def __init__(self, mysql_config, sql, *sql_params,
+                 rec_obj_mixin=None):
         if not mysql_config:
             raise ValueError(u'Invalid mysql connection config.')
 
-        Data.__init__(self)
+        Data.__init__(self, rec_obj_mixin=rec_obj_mixin)
 
         self._mysql_config = {
             'port': 3306,
