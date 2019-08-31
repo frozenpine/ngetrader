@@ -71,40 +71,58 @@ class Trader(NGEWebsocket):
             else:
                 time.sleep(0.5)
 
-    def on_tick(self, tick_data):
+    def on_tick(self, tick_data: dict, ts: int = None):
         pass
 
-    def on_trade(self, trade_data):
+    def on_trade(self, trade_data: dict, ts: int = None):
         pass
 
-    def on_quote(self, quote_data):
+    def on_quote(self, quote_data: dict, ts: int = None):
         pass
 
     # noinspection PyMethodMayBeStatic
     def on_bar(self, bar: Bar):
         pprint(bar)
 
-    def on_rtn_order(self, order):
+    def on_rtn_order(self, order_data: dict, ts: int = None):
         pass
 
-    def on_rtn_trade(self, trade):
+    def on_rtn_trade(self, trade_data: dict, ts: int = None):
         pass
 
     def _partial_handler(self, table_name, message):
         super(Trader, self)._partial_handler(table_name, message)
 
+        ts = message.get("@timestamp", None)
+
         if table_name == "trade":
             for trade_data in self.recent_trades():
                 self.kline.notify_trade(trade_data)
 
+        if table_name == "order":
+            for his_order in message["data"]:
+                try:
+                    self.on_rtn_order(order_data=his_order, ts=ts)
+                except Exception as e:
+                    self.logger.exception(e)
+
+        if table_name == "execution":
+            for his_exe in message["data"]:
+                try:
+                    self.on_rtn_trade(trade_data=his_exe, ts=ts)
+                except Exception as e:
+                    self.logger.exception(e)
+
     def _insert_handler(self, table_name, message):
         super(Trader, self)._insert_handler(table_name, message)
+
+        ts = message.get("@timestamp", None)
 
         if table_name == "trade":
             for trade_data in message["data"]:
                 # sequence can not be revered
                 try:
-                    self.on_trade(trade_data=trade_data)
+                    self.on_trade(trade_data=trade_data, ts=ts)
                 except Exception as e:
                     self.logger.exception(e)
 
@@ -113,31 +131,33 @@ class Trader(NGEWebsocket):
         if table_name == "order":
             for order_data in message["data"]:
                 try:
-                    self.on_rtn_order(order_data)
+                    self.on_rtn_order(order_data=order_data, ts=ts)
                 except Exception as e:
                     self.logger.exception(e)
 
         if table_name == "execution":
             for exe in message["data"]:
                 try:
-                    self.on_rtn_trade(exe)
+                    self.on_rtn_trade(trade_data=exe, ts=ts)
                 except Exception as e:
                     self.logger.exception(e)
 
     def _update_handler(self, table_name, message):
         super(Trader, self)._update_handler(table_name, message)
 
+        ts = message.get("@timestamp", None)
+
         if table_name == "order":
             for order_data in message["data"]:
                 try:
-                    self.on_rtn_order(order_data)
+                    self.on_rtn_order(order_data=order_data, ts=ts)
                 except Exception as e:
                     self.logger.exception(e)
 
         if table_name == "execution":
             for exe in message["data"]:
                 try:
-                    self.on_rtn_trade(exe)
+                    self.on_rtn_trade(trade_data=exe, ts=ts)
                 except Exception as e:
                     self.logger.exception(e)
 
