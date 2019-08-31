@@ -6,8 +6,7 @@ import logging
 import os
 import re
 import sys
-
-import requests
+import time
 
 from contextlib import contextmanager
 from functools import wraps
@@ -391,3 +390,6 @@ def get_env_bool(name):
 
 def get_env_string(name, default=''):
     return os.environ.get(name, default)
+
+def time_ms():
+    return int(time.time() * 1000)
