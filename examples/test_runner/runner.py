@@ -5,20 +5,20 @@ import re
 import json
 
 from pprint import pprint
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict, namedtuple, ChainMap
 from threading import RLock, Condition
 from functools import wraps
 from bravado.client import ResourceDecorator, CallableOperation
 
 try:
-    from common.utils import path, NUM_PATTERN
+    from common.utils import path, NUM_PATTERN, time_ms
     from common.data_source import CSVData
     from trade.core import Trader
 except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
-    from common.utils import path, NUM_PATTERN
+    from common.utils import path, NUM_PATTERN, time_ms
     from common.data_source import CSVData
     from trade.core import Trader
 
@@ -134,8 +134,11 @@ class APITester(Trader):
     def __init__(self, host="https://www.btcmex.com",
                  symbol="XBTUSD", api_key="", api_secret=""):
         self._request_orders = OrderedDict()
+
         self._rtn_orders = OrderedDict()
         self._rtn_trade = OrderedDict()
+
+        self._rtn_caches = ChainMap(self._rtn_orders, self._rtn_trade)
 
         self._wait_condition = Condition(RLock())
 
@@ -144,26 +147,26 @@ class APITester(Trader):
                                         api_secret=api_secret)
 
     @notify_rtn
-    def on_rtn_order(self, order_data: dict):
+    def on_rtn_order(self, order_data: dict, ts: int = None):
         order_id = order_data["orderID"]
 
         if order_id not in self._request_orders:
             return
 
-        self._rtn_orders[order_id] = order_data
+        self._rtn_orders[order_id] = (order_data, ts)
 
         print("委托回报:")
         pprint(order_data)
         print()
 
     @notify_rtn
-    def on_rtn_trade(self, trade_data: dict):
+    def on_rtn_trade(self, trade_data: dict, ts: int = None):
         order_id = trade_data["orderID"]
 
         if order_id not in self._request_orders:
             return
 
-        self._rtn_trade[order_id] = trade_data
+        self._rtn_trade[order_id] = (trade_data, ts)
 
         print("成交回报:")
         pprint(trade_data)
@@ -172,7 +175,7 @@ class APITester(Trader):
     def __getattr__(self, item):
         class ResourceWrapper:
             __args_tuple = namedtuple(
-                "args_tuple", ("logger", "request_cache", "sync_request_rtn",
+                "args_tuple", ("logger", "req_order_cache", "sync_request_rtn",
                                "wait_condition", "sync_rtn_wait",
                                "rtn_order_cache"))
 
@@ -189,8 +192,8 @@ class APITester(Trader):
 
                 for constraint_name in self.constraints:
                     constraint_value = req_data[constraint_name]
-                    if self.args.rtn_order_cache[
-                            key_value][constraint_name] != constraint_value:
+                    rtn_order, _ = self.args.rtn_order_cache[key_value]
+                    if rtn_order[constraint_name] != constraint_value:
                         return False
 
                 return True
@@ -200,19 +203,30 @@ class APITester(Trader):
                     http_future = self.origin_resource(*args, **kwargs)
 
                     try:
-                        results, _ = http_future.result()
+                        req_ts = time_ms()
+                        req_results, _ = http_future.result()
+                        self.args.logger.info("发送请求 {} : {} {}".format(
+                            self.origin_resource.operation.operation_id,
+                            args if args else "", kwargs if kwargs else ""))
+                        self.args.logger.debug(
+                            "url: {}, method: {}, header: {}, data: {}".format(
+                                http_future.future.request.url,
+                                http_future.future.request.method,
+                                http_future.future.request.headers,
+                                http_future.future.request.json
+                            ))
                     except Exception as e:
                         self.args.logger.exception(e)
                     else:
-                        if not isinstance(results, list):
-                            results = [results]
+                        if not isinstance(req_results, list):
+                            req_results = [req_results]
 
                         rtn_results = list()
 
-                        for result in results:
-                            key = result[self.key_name]
+                        for result in req_results:
+                            key_value = result[self.key_name]
 
-                            self.args.request_cache[key] = result
+                            self.args.req_order_cache[key_value] = result
 
                             if self.args.sync_request_rtn:
                                 with self.args.wait_condition:
@@ -220,10 +234,21 @@ class APITester(Trader):
                                         self.args.wait_condition.wait(
                                             self.args.sync_rtn_wait)
 
-                            rtn_results.append(self.args.rtn_order_cache[key])
+                            try:
+                                rtn_result, rtn_ts = self.args.rtn_order_cache[
+                                    key_value]
+                            except KeyError:
+                                pass
+                            else:
+                                rtn_results.append(rtn_result)
+
+                                self.args.logger.info(
+                                    "request[{}] round robin: {} ms".format(
+                                        rtn_result,
+                                        rtn_ts - req_ts))
 
                         return (rtn_results if self.args.sync_request_rtn else
-                                results)
+                                req_results)
 
                 return self.origin_resource(*args, **kwargs)
 
@@ -237,8 +262,9 @@ class APITester(Trader):
 
                 return origin_attr
 
+        # todo: 寻找一个 委托 <--> 回报 的唯一性约束，当前约束在特定条件下无效
         constraint_mapper = {
-            "Order": ("orderID", ("orderQty",))
+            "Order": ("orderID", ("orderQty", ))
         }
 
         origin_attribute = getattr(self._rest_client, item)
@@ -271,9 +297,13 @@ if __name__ == "__main__":
 
     for order in order_list:
         data = order.data()
+        # 该 "text" 自定义字段在改单时，会被 clear 修改为“改量”还是“改价”状态
+        data.update({"text": "test"})
         resource = getattr(ex, resource_name)
         for order_result in getattr(resource, order.action.strip())(**data):
             order.link(order_result)
 
     for order in order_list:
         print(json.dumps(order.to_dict()), order.check_result())
+
+    ex.join()
