@@ -5,11 +5,12 @@ import websocket
 import threading
 import json
 
-from time import sleep
+from time import sleep, time
 from threading import Event
 from urllib.parse import urlparse, urlunparse
 
 from clients.utils import generate_nonce, generate_signature
+from common.utils import time_ms
 
 
 # noinspection PyUnusedLocal
@@ -33,6 +34,7 @@ class NGEWebsocket(object):
 
         self.endpoint = host
         self.symbol = symbol
+        self.subscribed = list()
 
         if api_key is not None and api_secret is None:
             raise ValueError('api_secret is required if api_key is provided')
@@ -288,17 +290,23 @@ class NGEWebsocket(object):
 
         # You can sub to orderBookL2 for all levels, or orderBook10 for top
         # 10 levels & save bandwidth
-        symbol_subs = ["instrument", "orderBookL2", "trade", "quote"]
+        symbol_subs = [
+            "instrument", "orderBookL2",
+            "trade", "quote"] if self.BITMEX_COMPATIABLE else [
+            "instrument", "orderBookL2", "trade"]
         if self.has_authorization:
             symbol_subs += [
                 "execution", "order",
                 "position"] if self.BITMEX_COMPATIABLE else ["order"]
+
+        self.subscribed += symbol_subs
         subscriptions = [sub + ':' + self.symbol for sub in symbol_subs]
 
         generic_subs = ["margin"] if self.BITMEX_COMPATIABLE else [
             "execution", "position", "margin"]
         if self.has_authorization:
             subscriptions += generic_subs
+            self.subscribed += generic_subs
 
         url_parts = list(urlparse(self.endpoint))
         url_parts[0] = url_parts[0].replace('http', 'ws')
@@ -312,7 +320,7 @@ class NGEWebsocket(object):
         :return:
         """
         # Wait for the keys to show up from the ws
-        wait_tables = {'margin', 'order', 'position'}
+        wait_tables = {'margin', 'order', 'position'} & set(self.subscribed)
 
         while True:
             retrieved_account = wait_tables & set(self.data)
@@ -331,7 +339,8 @@ class NGEWebsocket(object):
         :param symbol:
         :return:
         """
-        wait_tables = {'instrument', 'trade', 'quote', 'orderBookL2'}
+        wait_tables = {'instrument', 'trade',
+                       'quote', 'orderBookL2'} & set(self.subscribed)
 
         while True:
             retrieved_symbols = wait_tables & set(self.data)
@@ -372,6 +381,8 @@ class NGEWebsocket(object):
         if 'subscribe' in message:
             self.logger.debug("Subscribed to %s." % message['subscribe'])
             return
+
+        message["@timestamp"] = time_ms()
 
         table = message.get('table')
         action = message.get('action')

@@ -160,7 +160,7 @@ def api(host="https://www.btcmex.com", config=None, api_key=None,
 
 
 if __name__ == "__main__":
-    host_addr = "test.365mex.com"
+    host_addr = "testnet.365mex.com"
     host_port = 80
 
     api_key = ""
