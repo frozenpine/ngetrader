@@ -1,0 +1,6 @@
+action,symbol,side,price,orderQty,remark,expect
+Order_new,XBTUSD,Buy,9800,1000,,ordStatus:New
+Order_new,XBTUSD,Sell,9900,100,,ordStatus:New
+Order_amend,,,,200,orderID:@${last_order}.orderID@,orderQty:200
+Order_cancel,,,,,orderID:@${order_list[0]}.orderID@,ordStatus:Canceled
+Order_cancelAll,,,,,,
