@@ -231,7 +231,7 @@ class CSVData(Data):
         for idx in range(col_length):
             parsed = False
 
-            value_data = cols[idx]
+            value_data = cols[idx].strip()
 
             for pattern, pattern_func in _parse_pattern:
                 if pattern.match(value_data):
@@ -269,11 +269,11 @@ class CSVData(Data):
         def _decode(values):
             for idx in range(len(values)):
                 try:
-                    values[idx] = values[idx].decode('utf-8')
+                    values[idx] = values[idx].decode('utf-8').strip()
                 except UnicodeDecodeError:
-                    values[idx] = values[idx].decode('gbk')
+                    values[idx] = values[idx].decode('gbk').strip()
                 except AttributeError:
-                    pass
+                    values[idx] = values[idx].strip()
             return values
 
         col_defines = []
