@@ -4,21 +4,20 @@ import yaml
 import re
 import json
 
-from pprint import pprint
 from collections import OrderedDict, namedtuple, ChainMap, UserDict
 from threading import RLock, Condition
 from functools import wraps
 from bravado.client import ResourceDecorator, CallableOperation
 
 try:
-    from common.utils import path, NUM_PATTERN, time_ms
+    from common.utils import path, NUM_PATTERN, time_ms, TmColor
     from common.data_source import CSVData
     from trade.core import Trader
 except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
-    from common.utils import path, NUM_PATTERN, time_ms
+    from common.utils import path, NUM_PATTERN, time_ms, TmColor
     from common.data_source import CSVData
     from trade.core import Trader
 
@@ -46,12 +45,12 @@ class DataMixin(object):
         expect = getattr(self, "expect")
 
         if not expect or not result:
-            return True
+            return True, result
 
         if "Error" in expect:
             err_msg = expect.split(":")[1].strip()
 
-            return err_msg in str(result)
+            return err_msg in str(result), result
 
         for key_name, expect_value in [
                 [p.strip() for p in exp.strip().split(":")]
@@ -60,9 +59,9 @@ class DataMixin(object):
                 expect_value = int(expect_value)
 
             if result[key_name] != expect_value:
-                return False
+                return False, result
 
-        return True
+        return True, result
 
     def __parse_param(self, value):
         item_pattern = re.compile(
@@ -212,9 +211,9 @@ class APITester(Trader):
 
         self._rtn_order_cache[order_id] = (order_data, ts)
 
-        print("委托回报:")
-        pprint(order_data)
-        print()
+        # print("委托回报:")
+        # pprint(order_data)
+        # print()
 
     @notify_rtn(wait_flag="SYNC_REQ_WITH_RTN",
                 wait_condition="_wait_condition")
@@ -226,9 +225,9 @@ class APITester(Trader):
 
         self._rtn_trade_cache[order_id] = (trade_data, ts)
 
-        print("成交回报:")
-        pprint(trade_data)
-        print()
+        # print("成交回报:")
+        # pprint(trade_data)
+        # print()
 
     def __getattr__(self, item):
         class ResourceWrapper:
@@ -362,6 +361,20 @@ if __name__ == "__main__":
         for order_result in getattr(resource, order.action)(**data):
             order.link(order_result)
 
-    for order in order_list:
-        print(json.dumps(order.to_dict(), ensure_ascii=False),
-              "Pass" if order.check_result() else "Failed")
+    for idx, order in enumerate(order_list):
+        print()
+
+        passed, result = order.check_result()
+
+        input_string = "{:02d}. Input: ".format(idx + 1)
+
+        print((input_string + "{}\n".format(json.dumps(order.to_dict(),
+                                                      ensure_ascii=False)) +
+               "Return: ".rjust(len(input_string)) + "{}\n".format(
+                  json.dumps(result) if isinstance(result, dict) else result) +
+               "Result: ".rjust(len(input_string)) +
+               TmColor.fg("Pass", "green") if passed else
+               TmColor.fg("Failed", "red")).replace(
+            "Input", TmColor.fg("Input", "yellow")).replace(
+            "Return", TmColor.fg("Return", "blue")).replace(
+            "Result", TmColor.fg("Result", "cyan")))
