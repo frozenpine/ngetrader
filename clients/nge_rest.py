@@ -13,7 +13,7 @@ from datetime import datetime
 
 from bravado.client import SwaggerClient
 from bravado.requests_client import RequestsClient, Authenticator
-from bravado_core.formatter import SwaggerFormat
+from bravado_core.formatter import SwaggerFormat, NO_OP
 from bravado_core.exception import SwaggerValidationError
 
 from clients.utils import generate_nonce, generate_signature
@@ -116,6 +116,15 @@ def api(host="https://www.btcmex.com", config=None, api_key=None,
                             to_python=datetime_deserializer,
                             description="date-time",
                             validate=datetime_validate
+                        ),
+                        SwaggerFormat(
+                            format="JSON",
+                            to_wire=lambda jsn_obj: jsn_obj
+                                if isinstance(jsn_obj, str)
+                                else json.dumps(jsn_obj),
+                            to_python=lambda jsn_str: jsn_str,
+                            description="JSON",
+                            validate=NO_OP
                         )]
         }
 
