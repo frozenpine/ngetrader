@@ -41,12 +41,17 @@ class DataMixin(object):
         return list(self.__REC_DATA_MAPPER.values())
 
     def check_result(self):
-        result = self.__REC_DATA_MAPPER[self]
+        result = self.__REC_DATA_MAPPER.get(self, None)
 
-        expect = getattr(self, "expect").strip()
+        expect = getattr(self, "expect")
 
-        if not expect:
-            return "Pass"
+        if not expect or not result:
+            return True
+
+        if "Error" in expect:
+            err_msg = expect.split(":")[1].strip()
+
+            return err_msg in str(result)
 
         for key_name, expect_value in [
                 [p.strip() for p in exp.strip().split(":")]
@@ -55,9 +60,9 @@ class DataMixin(object):
                 expect_value = int(expect_value)
 
             if result[key_name] != expect_value:
-                return "Failed"
+                return False
 
-        return "Pass"
+        return True
 
     def __parse_param(self, value):
         item_pattern = re.compile(
@@ -88,7 +93,7 @@ class DataMixin(object):
     def data(self):
         data_dict = getattr(self, "to_dict")()
 
-        for fix in ("action", "remark", "expect"):
+        for fix in ("action", "params", "expect"):
             data_dict.pop(fix, None)
 
         for k, v in data_dict.copy().items():
@@ -98,11 +103,11 @@ class DataMixin(object):
             if isinstance(v, str) and self.__PARAM_PATTERN.match(v):
                 data_dict[k] = self.__parse_param(v)
 
-        remark = getattr(self, "remark")
-        if remark:
+        params = getattr(self, "params")
+        if params:
             for key_name, value in [
-                [p.strip() for p in rem.strip().split(":")] for
-                rem in remark.strip().split(",")
+                [p.strip() for p in param.strip().split(":")] for param in
+                params.split(",")
             ]:
                 if not self.__PARAM_PATTERN.match(value):
                     continue
@@ -247,9 +252,10 @@ class APITester(Trader):
                     try:
                         req_ts = time_ms()
                         req_results, rsp = http_future.result()
-                        self.logger.info("发送请求 {} : {} {}".format(
+                        self.logger.info("send request[{}]: {}".format(
                             self.origin_resource.operation.operation_id,
-                            args if args else "", kwargs if kwargs else ""))
+                            (json.dumps(args) if args else "" +
+                             json.dumps(kwargs) if kwargs else "")))
                         self.logger.debug(
                             "url: {}, method: {}, header: {}, data: {}".format(
                                 http_future.future.request.url,
@@ -279,15 +285,22 @@ class APITester(Trader):
                                 self.args.wait_condition.wait(
                                     self.args.rtn_wait_timeout)
 
-                        rtn_result, rtn_ts = self.rtn_cache[key_value]
+                        try:
+                            rtn_result, rtn_ts = self.rtn_cache[key_value]
+                        except KeyError:
+                            self.logger.error(
+                                "fail to get rtn[{}] from cache: {}".format(
+                                    key_value, self.rtn_cache
+                                ))
+                            continue
+
                         rtn_results.append(rtn_result)
                         self.req_cache[key_value] = rtn_result
 
                         if rtn_ts:
                             self.logger.info(
-                                "request[{}] round robin: {} ms".format(
-                                    rtn_result,
-                                    rtn_ts - req_ts))
+                                "receive request in [{} ms]: {}".format(
+                                    rtn_ts - req_ts, rtn_result))
 
                     return rtn_results
 
@@ -346,10 +359,9 @@ if __name__ == "__main__":
     for order in order_list:
         data = order.data()
         resource = getattr(ex, resource_name)
-        for order_result in getattr(resource, order.action.strip())(**data):
+        for order_result in getattr(resource, order.action)(**data):
             order.link(order_result)
 
     for order in order_list:
-        print(json.dumps(order.to_dict()), order.check_result())
-
-    ex.join()
+        print(json.dumps(order.to_dict(), ensure_ascii=False),
+              "Pass" if order.check_result() else "Failed")
