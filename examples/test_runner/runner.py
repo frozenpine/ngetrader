@@ -12,7 +12,7 @@ from bravado.exception import HTTPBadRequest
 
 try:
     from common.utils import (path, time_ms, TmColor,
-                              try_parse_num, REGEX_PATTERN)
+                              try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
 except ImportError:
@@ -20,7 +20,7 @@ except ImportError:
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
     from common.utils import (path, time_ms, TmColor,
-                              try_parse_num, REGEX_PATTERN)
+                              try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
 
@@ -53,12 +53,11 @@ class DataMixin(object):
         if "Error" in expect:
             err_expect = expect.split(":")[1].strip()
 
-            regex = REGEX_PATTERN.match(err_expect)
-            if not regex:
+            parsed, regex = try_parse_regex(err_expect)
+            if not parsed:
                 return err_expect in result["error"]["message"], result
 
-            if re.findall(regex.groupdict()["pattern"],
-                          result["error"]["message"]):
+            if regex.findall(result["error"]["message"]):
                 return True, result
 
             return False, result
@@ -92,16 +91,15 @@ class DataMixin(object):
         if "Error" in expect:
             err_expect = expect.split(":")[1].strip()
 
-            regex = REGEX_PATTERN.match(err_expect)
+            parsed, regex = try_parse_regex(err_expect)
 
-            if not regex:
+            if not parsed:
                 return err_expect in result_string, result_string.replace(
                     err_expect, TmColor.fg(err_expect, "green"))
 
             matched = False
 
-            for msg in re.findall(regex.groupdict()["pattern"],
-                                  result_string):
+            for msg in regex.findall(result_string):
                 result_string = result_string.replace(
                     msg, TmColor.fg(msg, "green"))
                 matched = True
@@ -190,11 +188,11 @@ class DataMixin(object):
 
         return data_dict
 
-    def do_action(self, resource):
+    def do_action(self, act_resource):
         action = getattr(self, "action")
         data = self.data()
 
-        for order_result in getattr(resource, action)(**data):
+        for order_result in getattr(act_resource, action)(**data):
             self.link(order_result)
 
 

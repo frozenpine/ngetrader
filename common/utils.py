@@ -190,7 +190,7 @@ SET_PATTERN = re.compile(r'^(?:[\w \t(,)\'"]+\|)+[\w \t(,)\'"]+$')
 
 LITERAL_PATTERN = re.compile(r'(?:[{[(].*[}\])][,\s\r\n]?)+')
 
-REGEX_PATTERN = re.compile(r'(?:(?P<prefix>reg(?:ybmex)?://)|/)'
+REGEX_PATTERN = re.compile(r'(?:(?P<prefix>reg(?:ex)?://)|/)'
                            r'(?P<pattern>.+)'
                            r'(?(prefix)|/)$',
                            flags=re.IGNORECASE)
@@ -336,6 +336,15 @@ def try_parse_quote(quote_string):
     if QUOTE_PATTERN.match(quote_string):
         return True, quote_string.lstrip('\'"').rstrip('\'"')
     return False, quote_string
+
+
+def try_parse_regex(regex_string):
+    match = REGEX_PATTERN.match(regex_string)
+
+    if not match:
+        return False, regex_string
+
+    return True, re.compile(match.groupdict()["pattern"])
 
 
 def transform_pascal(input_word):
