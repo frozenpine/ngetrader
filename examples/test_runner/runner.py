@@ -325,9 +325,19 @@ class ResourceWrapper:
             self.req_cache.inflight(key_value, result)
 
             with self.args.wait_condition:
-                if self.req_cache.is_inflight(key_value):
+                wait_count = 0
+
+                while self.req_cache.is_inflight(key_value):
                     self.args.wait_condition.wait(
                         self.args.rtn_wait_timeout)
+
+                    wait_count += 1
+
+                    if wait_count > 3:
+                        raise RuntimeError(
+                            "Waiting response timeout "
+                            "for {} times[{} s]".format(
+                                wait_count, self.args.rtn_wait_timeout))
 
             try:
                 rtn_result, rtn_ts = self.rtn_cache[key_value]
@@ -339,7 +349,6 @@ class ResourceWrapper:
                 continue
 
             rtn_results.append(rtn_result)
-            self.req_cache[key_value] = rtn_result
 
             if rtn_ts:
                 self.logger.info(
@@ -389,6 +398,7 @@ class APITester(Trader):
             return
 
         self._rtn_order_cache[order_id] = (order_data, ts)
+        self._request_cache[order_id] = order_data
 
     @notify_rtn(wait_flag="SYNC_REQ_WITH_RTN",
                 wait_condition="_wait_condition")
