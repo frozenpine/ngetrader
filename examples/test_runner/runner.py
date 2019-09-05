@@ -8,6 +8,7 @@ from collections import OrderedDict, namedtuple, ChainMap, UserDict
 from threading import RLock, Condition
 from functools import wraps
 from bravado.client import ResourceDecorator, CallableOperation
+from bravado.exception import HTTPBadRequest
 
 try:
     from common.utils import (path, time_ms, TmColor,
@@ -54,9 +55,10 @@ class DataMixin(object):
 
             regex = REGEX_PATTERN.match(err_expect)
             if not regex:
-                return err_expect in str(result), result
+                return err_expect in result["error"]["message"], result
 
-            if re.findall(regex.groupdict()["pattern"], str(result)):
+            if re.findall(regex.groupdict()["pattern"],
+                          result["error"]["message"]):
                 return True, result
 
             return False, result
@@ -79,8 +81,8 @@ class DataMixin(object):
     def highlight_check_result(self):
         result = self.__REC_DATA_MAPPER.get(self, None)
 
-        result_string = (json.dumps(result) if isinstance(result, dict) else
-                         str(result))
+        result_string = (json.dumps(result, ensure_ascii=False)
+                         if isinstance(result, dict) else str(result))
 
         expect = getattr(self, "expect")
 
@@ -163,10 +165,16 @@ class DataMixin(object):
             data_dict.pop(fix, None)
 
         for k, v in data_dict.copy().items():
+            if not isinstance(v, str):
+                if v is None:
+                    data_dict.pop(k)
+
+                continue
+
             if not v:
                 data_dict.pop(k)
 
-            if isinstance(v, str) and self.__PARAM_PATTERN.match(v):
+            if self.__PARAM_PATTERN.match(v):
                 data_dict[k] = self.__parse_param(v)
 
         params = getattr(self, "params")
@@ -181,6 +189,13 @@ class DataMixin(object):
                 data_dict[key_name] = self.__parse_param(value)
 
         return data_dict
+
+    def do_action(self, resource):
+        action = getattr(self, "action")
+        data = self.data()
+
+        for order_result in getattr(resource, action)(**data):
+            self.link(order_result)
 
 
 def notify_rtn(wait_flag, wait_condition):
@@ -262,6 +277,7 @@ class ResourceWrapper:
         self.logger = logger
         self.args = args
         self.origin_resource = origin_res
+        self.origin_operation = None
 
     def __execution(self, http_future):
         req_ts = time_ms()
@@ -287,56 +303,58 @@ class ResourceWrapper:
         return req_ts, req_results
 
     def __call__(self, *args, **kwargs):
-        if isinstance(self.origin_resource, CallableOperation):
-            http_future = self.origin_resource(*args, **kwargs)
+        if not self.origin_operation:
+            raise TypeError("Operation is invalid.")
+
+        http_future = self.origin_operation(*args, **kwargs)
+
+        try:
+            req_ts, req_results = self.__execution(http_future)
+        except HTTPBadRequest as e:
+            if e.swagger_result:
+                return [e.swagger_result]
+            else:
+                raise
+
+        if not self.args.sync_req_rtn:
+            return req_results
+
+        rtn_results = list()
+
+        for result in req_results:
+            key_value = result[self.key_name]
+
+            self.req_cache.inflight(key_value, result)
+
+            with self.args.wait_condition:
+                if self.req_cache.is_inflight(key_value):
+                    self.args.wait_condition.wait(
+                        self.args.rtn_wait_timeout)
 
             try:
-                req_ts, req_results = self.__execution(http_future)
-            except Exception as e:
-                self.logger.exception(e)
-                return [e]
+                rtn_result, rtn_ts = self.rtn_cache[key_value]
+            except KeyError:
+                self.logger.error(
+                    "fail to get rtn[{}] from cache: {}".format(
+                        key_value, self.rtn_cache
+                    ))
+                continue
 
-            if not self.args.sync_req_rtn:
-                return req_results
+            rtn_results.append(rtn_result)
+            self.req_cache[key_value] = rtn_result
 
-            rtn_results = list()
+            if rtn_ts:
+                self.logger.info(
+                    "receive response in [{} ms]: {}".format(
+                        rtn_ts - req_ts, rtn_result))
 
-            for result in req_results:
-                key_value = result[self.key_name]
-
-                self.req_cache.inflight(key_value, result)
-
-                with self.args.wait_condition:
-                    if self.req_cache.is_inflight(key_value):
-                        self.args.wait_condition.wait(
-                            self.args.rtn_wait_timeout)
-
-                try:
-                    rtn_result, rtn_ts = self.rtn_cache[key_value]
-                except KeyError:
-                    self.logger.error(
-                        "fail to get rtn[{}] from cache: {}".format(
-                            key_value, self.rtn_cache
-                        ))
-                    continue
-
-                rtn_results.append(rtn_result)
-                self.req_cache[key_value] = rtn_result
-
-                if rtn_ts:
-                    self.logger.info(
-                        "receive request in [{} ms]: {}".format(
-                            rtn_ts - req_ts, rtn_result))
-
-            return rtn_results
-
-        return self.origin_resource(*args, **kwargs)
+        return rtn_results
 
     def __getattr__(self, attr_name):
         origin_attr = getattr(self.origin_resource, attr_name)
 
         if isinstance(origin_attr, (CallableOperation, )):
-            self.origin_resource = origin_attr
+            self.origin_operation = origin_attr
 
             return self
 
@@ -374,10 +392,6 @@ class APITester(Trader):
 
         self._rtn_order_cache[order_id] = (order_data, ts)
 
-        # print("委托回报:")
-        # pprint(order_data)
-        # print()
-
     @notify_rtn(wait_flag="SYNC_REQ_WITH_RTN",
                 wait_condition="_wait_condition")
     def on_rtn_trade(self, trade_data: dict, ts: int = None):
@@ -387,10 +401,6 @@ class APITester(Trader):
             return
 
         self._rtn_trade_cache[order_id] = (trade_data, ts)
-
-        # print("成交回报:")
-        # pprint(trade_data)
-        # print()
 
     def __getattr__(self, item):
         key_mapper = {
@@ -430,18 +440,16 @@ if __name__ == "__main__":
 
     order_file = os.path.join(csv_base, "order.csv")
     resource_name = str(os.path.basename(order_file).split(".")[0].capitalize())
+    resource = getattr(ex, resource_name)
 
     order_list = CSVData(order_file, rec_obj_mixin=(DataMixin, ))
 
     for order in order_list:
-        data = order.data()
-        resource = getattr(ex, resource_name)
-        for order_result in getattr(resource, order.action)(**data):
-            order.link(order_result)
+        order.do_action(resource)
+
+    print()
 
     for idx, order in enumerate(order_list):
-        print()
-
         passed, highlight_result = order.highlight_check_result()
 
         input_string = "{:02d}. Input: ".format(idx + 1)
@@ -455,7 +463,7 @@ if __name__ == "__main__":
                 "Result: ".rjust(len(input_string)) +
                 (TmColor.fg("Pass", "green") if passed else
                  TmColor.fg("Failed", "red"))
-             ).replace(
+        ).replace(
             "Input", TmColor.fg("Input", "yellow")).replace(
             "Return", TmColor.fg("Return", "blue")).replace(
             "Result", TmColor.fg("Result", "cyan"))
