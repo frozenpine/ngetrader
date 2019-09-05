@@ -11,7 +11,7 @@ from bravado.client import ResourceDecorator, CallableOperation
 
 try:
     from common.utils import (path, time_ms, TmColor,
-                              NUM_PATTERN, REGEX_PATTERN)
+                              try_parse_num, REGEX_PATTERN)
     from common.data_source import CSVData
     from trade.core import Trader
 except ImportError:
@@ -19,7 +19,7 @@ except ImportError:
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
     from common.utils import (path, time_ms, TmColor,
-                              NUM_PATTERN, REGEX_PATTERN)
+                              try_parse_num, REGEX_PATTERN)
     from common.data_source import CSVData
     from trade.core import Trader
 
@@ -64,8 +64,7 @@ class DataMixin(object):
         for key_name, expect_value in [
                 [p.strip() for p in exp.strip().split(":")]
                 for exp in expect.split(",")]:
-            if NUM_PATTERN.match(expect_value):
-                expect_value = int(expect_value)
+            _, expect_value = try_parse_num(expect_value)
 
             try:
                 result_value = result[key_name]
@@ -76,6 +75,61 @@ class DataMixin(object):
                 return False, result
 
         return True, result
+
+    def highlight_check_result(self):
+        result = self.__REC_DATA_MAPPER.get(self, None)
+
+        result_string = (json.dumps(result) if isinstance(result, dict) else
+                         str(result))
+
+        expect = getattr(self, "expect")
+
+        if not expect or not result:
+            return True, result_string
+
+        if "Error" in expect:
+            err_expect = expect.split(":")[1].strip()
+
+            regex = REGEX_PATTERN.match(err_expect)
+
+            if not regex:
+                return err_expect in result_string, result_string.replace(
+                    err_expect, TmColor.fg(err_expect, "green"))
+
+            matched = False
+
+            for msg in re.findall(regex.groupdict()["pattern"],
+                                  result_string):
+                result_string = result_string.replace(
+                    msg, TmColor.fg(msg, "green"))
+                matched = True
+
+            return matched, result_string
+
+        check_bool = True
+
+        for key_name, expect_value in [
+                [p.strip() for p in exp.strip().split(":")]
+                for exp in expect.split(",")]:
+            _, expect_value = try_parse_num(expect_value)
+
+            try:
+                value_match = expect_value == result[key_name]
+
+                highlight_value = json.dumps(
+                    {key_name: result[key_name]}).strip("{}")
+            except (KeyError, AttributeError, TypeError):
+                check_bool = False
+                result_string = TmColor.fg(result_string, "red")
+            else:
+                result_string = result_string.replace(
+                    highlight_value,
+                    TmColor.fg(highlight_value,
+                               "green" if value_match else "red"))
+
+                check_bool = check_bool and value_match
+
+        return check_bool, result_string
 
     def __parse_param(self, value):
         item_pattern = re.compile(
@@ -96,8 +150,7 @@ class DataMixin(object):
                 item = item()
 
             if ref_idx is not None:
-                if NUM_PATTERN.match(ref_idx):
-                    ref_idx = int(ref_idx)
+                _, ref_idx = try_parse_num(ref_idx)
 
                 item = item[ref_idx]
 
@@ -389,7 +442,7 @@ if __name__ == "__main__":
     for idx, order in enumerate(order_list):
         print()
 
-        passed, chk_result = order.check_result()
+        passed, highlight_result = order.highlight_check_result()
 
         input_string = "{:02d}. Input: ".format(idx + 1)
 
@@ -398,12 +451,12 @@ if __name__ == "__main__":
                 "{}\n".format(json.dumps(order.to_dict(),
                                          ensure_ascii=False)) +
                 "Return: ".rjust(len(input_string)) +
-                "{}\n".format(json.dumps(chk_result)
-                              if isinstance(chk_result, dict) else chk_result) +
+                "{}\n".format(highlight_result) +
                 "Result: ".rjust(len(input_string)) +
                 (TmColor.fg("Pass", "green") if passed else
                  TmColor.fg("Failed", "red"))
              ).replace(
             "Input", TmColor.fg("Input", "yellow")).replace(
             "Return", TmColor.fg("Return", "blue")).replace(
-            "Result", TmColor.fg("Result", "cyan")))
+            "Result", TmColor.fg("Result", "cyan"))
+        )
