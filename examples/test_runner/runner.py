@@ -199,7 +199,6 @@ class ResourceWrapper:
         "args_tuple", ("sync_req_rtn", "wait_condition",
                        "rtn_wait_timeout"))
 
-
     __EXECUTION_PATTERN = re.compile(r'{%.+%}')
 
     def __init__(self, req_key: str, req_cache: RequestCache,
@@ -390,7 +389,7 @@ if __name__ == "__main__":
     for idx, order in enumerate(order_list):
         print()
 
-        passed, result = order.check_result()
+        passed, chk_result = order.check_result()
 
         input_string = "{:02d}. Input: ".format(idx + 1)
 
@@ -399,8 +398,8 @@ if __name__ == "__main__":
                 "{}\n".format(json.dumps(order.to_dict(),
                                          ensure_ascii=False)) +
                 "Return: ".rjust(len(input_string)) +
-                "{}\n".format(json.dumps(result)
-                              if isinstance(result, dict) else result) +
+                "{}\n".format(json.dumps(chk_result)
+                              if isinstance(chk_result, dict) else chk_result) +
                 "Result: ".rjust(len(input_string)) +
                 (TmColor.fg("Pass", "green") if passed else
                  TmColor.fg("Failed", "red"))
