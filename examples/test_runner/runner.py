@@ -8,16 +8,19 @@ from collections import OrderedDict, namedtuple, ChainMap, UserDict
 from threading import RLock, Condition
 from functools import wraps
 from bravado.client import ResourceDecorator, CallableOperation
+from bravado.exception import HTTPBadRequest
 
 try:
-    from common.utils import path, NUM_PATTERN, time_ms, TmColor
+    from common.utils import (path, time_ms, TmColor,
+                              try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
 except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
-    from common.utils import path, NUM_PATTERN, time_ms, TmColor
+    from common.utils import (path, time_ms, TmColor,
+                              try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
 
@@ -48,20 +51,85 @@ class DataMixin(object):
             return True, result
 
         if "Error" in expect:
-            err_msg = expect.split(":")[1].strip()
+            err_expect = expect.split(":")[1].strip()
 
-            return err_msg in str(result), result
+            parsed, regex = try_parse_regex(err_expect)
+            if not parsed:
+                return err_expect in result["error"]["message"], result
+
+            if regex.findall(result["error"]["message"]):
+                return True, result
+
+            return False, result
 
         for key_name, expect_value in [
                 [p.strip() for p in exp.strip().split(":")]
                 for exp in expect.split(",")]:
-            if NUM_PATTERN.match(expect_value):
-                expect_value = int(expect_value)
+            _, expect_value = try_parse_num(expect_value)
 
-            if result[key_name] != expect_value:
+            try:
+                result_value = result[key_name]
+            except (KeyError, AttributeError, TypeError):
+                return False, result
+
+            if result_value != expect_value:
                 return False, result
 
         return True, result
+
+    def highlight_check_result(self):
+        result = self.__REC_DATA_MAPPER.get(self, None)
+
+        result_string = (json.dumps(result, ensure_ascii=False)
+                         if isinstance(result, dict) else str(result))
+
+        expect = getattr(self, "expect")
+
+        if not expect or not result:
+            return True, result_string
+
+        if "Error" in expect:
+            err_expect = expect.split(":")[1].strip()
+
+            parsed, regex = try_parse_regex(err_expect)
+
+            if not parsed:
+                return err_expect in result_string, result_string.replace(
+                    err_expect, TmColor.fg(err_expect, "green"))
+
+            matched = False
+
+            for msg in regex.findall(result_string):
+                result_string = result_string.replace(
+                    msg, TmColor.fg(msg, "green"))
+                matched = True
+
+            return matched, result_string
+
+        check_bool = True
+
+        for key_name, expect_value in [
+                [p.strip() for p in exp.strip().split(":")]
+                for exp in expect.split(",")]:
+            _, expect_value = try_parse_num(expect_value)
+
+            try:
+                value_match = expect_value == result[key_name]
+
+                highlight_value = json.dumps(
+                    {key_name: result[key_name]}).strip("{}")
+            except (KeyError, AttributeError, TypeError):
+                check_bool = False
+                result_string = TmColor.fg(result_string, "red")
+            else:
+                result_string = result_string.replace(
+                    highlight_value,
+                    TmColor.fg(highlight_value,
+                               "green" if value_match else "red"))
+
+                check_bool = check_bool and value_match
+
+        return check_bool, result_string
 
     def __parse_param(self, value):
         item_pattern = re.compile(
@@ -82,8 +150,7 @@ class DataMixin(object):
                 item = item()
 
             if ref_idx is not None:
-                if NUM_PATTERN.match(ref_idx):
-                    ref_idx = int(ref_idx)
+                _, ref_idx = try_parse_num(ref_idx)
 
                 item = item[ref_idx]
 
@@ -96,10 +163,16 @@ class DataMixin(object):
             data_dict.pop(fix, None)
 
         for k, v in data_dict.copy().items():
+            if not isinstance(v, str):
+                if v is None:
+                    data_dict.pop(k)
+
+                continue
+
             if not v:
                 data_dict.pop(k)
 
-            if isinstance(v, str) and self.__PARAM_PATTERN.match(v):
+            if self.__PARAM_PATTERN.match(v):
                 data_dict[k] = self.__parse_param(v)
 
         params = getattr(self, "params")
@@ -114,6 +187,13 @@ class DataMixin(object):
                 data_dict[key_name] = self.__parse_param(value)
 
         return data_dict
+
+    def do_action(self, act_resource):
+        action = getattr(self, "action")
+        data = self.data()
+
+        for order_result in getattr(act_resource, action)(**data):
+            self.link(order_result)
 
 
 def notify_rtn(wait_flag, wait_condition):
@@ -180,6 +260,114 @@ class RequestCache(UserDict):
         return self._cache.__iter__()
 
 
+class ResourceWrapper:
+    args_tuple = namedtuple(
+        "args_tuple", ("sync_req_rtn", "wait_condition",
+                       "rtn_wait_timeout"))
+
+    __EXECUTION_PATTERN = re.compile(r'{%.+%}')
+
+    def __init__(self, req_key: str, req_cache: RequestCache,
+                 rtn_cache, logger, origin_res, args: args_tuple):
+        self.key_name = req_key
+        self.req_cache = req_cache
+        self.rtn_cache = rtn_cache
+        self.logger = logger
+        self.args = args
+        self.origin_resource = origin_res
+        self.origin_operation = None
+
+    def __execution(self, http_future):
+        req_ts = time_ms()
+
+        req_results, rsp = http_future.result()
+        self.logger.info(
+            "send request[{}]: url[{}], method[{}], "
+            "header[{}], data[{}]".format(
+                http_future.operation.operation_id,
+                http_future.future.request.url,
+                http_future.future.request.method,
+                http_future.future.request.headers,
+                (http_future.future.request.data if
+                 http_future.future.request.data else
+                 json.dumps(http_future.future.request.json)
+                 )
+            )
+        )
+
+        if not isinstance(req_results, list):
+            req_results = [req_results]
+
+        return req_ts, req_results
+
+    def __call__(self, *args, **kwargs):
+        if not self.origin_operation:
+            raise TypeError("Operation is invalid.")
+
+        http_future = self.origin_operation(*args, **kwargs)
+
+        try:
+            req_ts, req_results = self.__execution(http_future)
+        except HTTPBadRequest as e:
+            if e.swagger_result:
+                return [e.swagger_result]
+            else:
+                raise
+
+        if not self.args.sync_req_rtn:
+            return req_results
+
+        rtn_results = list()
+
+        for result in req_results:
+            key_value = result[self.key_name]
+
+            self.req_cache.inflight(key_value, result)
+
+            with self.args.wait_condition:
+                wait_count = 0
+
+                while self.req_cache.is_inflight(key_value):
+                    self.args.wait_condition.wait(
+                        self.args.rtn_wait_timeout)
+
+                    wait_count += 1
+
+                    if wait_count > 3:
+                        raise RuntimeError(
+                            "Waiting response timeout "
+                            "for {} times[{} s]".format(
+                                wait_count, self.args.rtn_wait_timeout))
+
+            try:
+                rtn_result, rtn_ts = self.rtn_cache[key_value]
+            except KeyError:
+                self.logger.error(
+                    "fail to get rtn[{}] from cache: {}".format(
+                        key_value, self.rtn_cache
+                    ))
+                continue
+
+            rtn_results.append(rtn_result)
+
+            if rtn_ts:
+                self.logger.info(
+                    "receive response in [{} ms]: {}".format(
+                        rtn_ts - req_ts, rtn_result))
+
+        return rtn_results
+
+    def __getattr__(self, attr_name):
+        origin_attr = getattr(self.origin_resource, attr_name)
+
+        if isinstance(origin_attr, (CallableOperation, )):
+            self.origin_operation = origin_attr
+
+            return self
+
+        return origin_attr
+
+
 class APITester(Trader):
     SYNC_REQ_WITH_RTN = True
     RTN_WAIT_TIMEOUT = 10
@@ -210,10 +398,7 @@ class APITester(Trader):
             return
 
         self._rtn_order_cache[order_id] = (order_data, ts)
-
-        # print("委托回报:")
-        # pprint(order_data)
-        # print()
+        self._request_cache[order_id] = order_data
 
     @notify_rtn(wait_flag="SYNC_REQ_WITH_RTN",
                 wait_condition="_wait_condition")
@@ -225,96 +410,7 @@ class APITester(Trader):
 
         self._rtn_trade_cache[order_id] = (trade_data, ts)
 
-        # print("成交回报:")
-        # pprint(trade_data)
-        # print()
-
     def __getattr__(self, item):
-        class ResourceWrapper:
-            args_tuple = namedtuple(
-                "args_tuple", ("sync_req_rtn", "wait_condition",
-                               "rtn_wait_timeout"))
-
-            def __init__(self, req_key: str, req_cache: RequestCache,
-                         rtn_cache, logger, origin_res, args: args_tuple):
-                self.key_name = req_key
-                self.req_cache = req_cache
-                self.rtn_cache = rtn_cache
-                self.logger = logger
-                self.args = args
-                self.origin_resource = origin_res
-
-            def __call__(self, *args, **kwargs):
-                if isinstance(self.origin_resource, CallableOperation):
-                    http_future = self.origin_resource(*args, **kwargs)
-
-                    try:
-                        req_ts = time_ms()
-                        req_results, rsp = http_future.result()
-                        self.logger.info("send request[{}]: {}".format(
-                            self.origin_resource.operation.operation_id,
-                            (json.dumps(args) if args else "" +
-                             json.dumps(kwargs) if kwargs else "")))
-                        self.logger.debug(
-                            "url: {}, method: {}, header: {}, data: {}".format(
-                                http_future.future.request.url,
-                                http_future.future.request.method,
-                                http_future.future.request.headers,
-                                http_future.future.request.json
-                            ))
-                    except Exception as e:
-                        self.logger.exception(e)
-                        return [e]
-
-                    if not isinstance(req_results, list):
-                        req_results = [req_results]
-
-                    if not self.args.sync_req_rtn:
-                        return req_results
-
-                    rtn_results = list()
-
-                    for result in req_results:
-                        key_value = result[self.key_name]
-
-                        self.req_cache.inflight(key_value, result)
-
-                        with self.args.wait_condition:
-                            if self.req_cache.is_inflight(key_value):
-                                self.args.wait_condition.wait(
-                                    self.args.rtn_wait_timeout)
-
-                        try:
-                            rtn_result, rtn_ts = self.rtn_cache[key_value]
-                        except KeyError:
-                            self.logger.error(
-                                "fail to get rtn[{}] from cache: {}".format(
-                                    key_value, self.rtn_cache
-                                ))
-                            continue
-
-                        rtn_results.append(rtn_result)
-                        self.req_cache[key_value] = rtn_result
-
-                        if rtn_ts:
-                            self.logger.info(
-                                "receive request in [{} ms]: {}".format(
-                                    rtn_ts - req_ts, rtn_result))
-
-                    return rtn_results
-
-                return self.origin_resource(*args, **kwargs)
-
-            def __getattr__(self, attr_name):
-                origin_attr = getattr(self.origin_resource, attr_name)
-
-                if isinstance(origin_attr, (CallableOperation, )):
-                    self.origin_resource = origin_attr
-
-                    return self
-
-                return origin_attr
-
         key_mapper = {
             "Order": "orderID"
         }
@@ -352,29 +448,31 @@ if __name__ == "__main__":
 
     order_file = os.path.join(csv_base, "order.csv")
     resource_name = str(os.path.basename(order_file).split(".")[0].capitalize())
+    resource = getattr(ex, resource_name)
 
     order_list = CSVData(order_file, rec_obj_mixin=(DataMixin, ))
 
     for order in order_list:
-        data = order.data()
-        resource = getattr(ex, resource_name)
-        for order_result in getattr(resource, order.action)(**data):
-            order.link(order_result)
+        order.do_action(resource)
+
+    print()
 
     for idx, order in enumerate(order_list):
-        print()
-
-        passed, result = order.check_result()
+        passed, highlight_result = order.highlight_check_result()
 
         input_string = "{:02d}. Input: ".format(idx + 1)
 
-        print((input_string + "{}\n".format(json.dumps(order.to_dict(),
-                                                      ensure_ascii=False)) +
-               "Return: ".rjust(len(input_string)) + "{}\n".format(
-                  json.dumps(result) if isinstance(result, dict) else result) +
-               "Result: ".rjust(len(input_string)) +
-               TmColor.fg("Pass", "green") if passed else
-               TmColor.fg("Failed", "red")).replace(
+        print((
+                input_string +
+                "{}\n".format(json.dumps(order.to_dict(),
+                                         ensure_ascii=False)) +
+                "Return: ".rjust(len(input_string)) +
+                "{}\n".format(highlight_result) +
+                "Result: ".rjust(len(input_string)) +
+                (TmColor.fg("Pass", "green") if passed else
+                 TmColor.fg("Failed", "red"))
+        ).replace(
             "Input", TmColor.fg("Input", "yellow")).replace(
             "Return", TmColor.fg("Return", "blue")).replace(
-            "Result", TmColor.fg("Result", "cyan")))
+            "Result", TmColor.fg("Result", "cyan"))
+        )
