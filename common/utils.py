@@ -451,5 +451,25 @@ class TColor:
             text)
 
     @staticmethod
+    def regex_rend(pattern, text, fg=None, bg=None, bold=False):
+        if isinstance(pattern, str):
+            pattern = re.compile(pattern)
+
+        for msg in pattern.findall(text):
+            text = text.replace(msg, TColor.rend(msg, fg=fg, bg=bg, bold=bold))
+
+        return text
+
+    @staticmethod
     def highlight(text, color):
         return TColor.rend(text=text, fg="bright black", bg=color, bold=True)
+
+    @staticmethod
+    def regex_highlight(pattern, text, color):
+        if isinstance(pattern, str):
+            pattern = re.compile(pattern)
+
+        for msg in pattern.findall(text):
+            text = text.replace(msg, TColor.highlight(msg, color=color))
+
+        return text
