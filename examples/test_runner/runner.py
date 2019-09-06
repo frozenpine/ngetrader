@@ -11,7 +11,7 @@ from bravado.client import ResourceDecorator, CallableOperation
 from bravado.exception import HTTPBadRequest
 
 try:
-    from common.utils import (path, time_ms, TmColor,
+    from common.utils import (path, time_ms, TColor,
                               try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
@@ -19,7 +19,7 @@ except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
-    from common.utils import (path, time_ms, TmColor,
+    from common.utils import (path, time_ms, TColor,
                               try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
@@ -95,13 +95,14 @@ class DataMixin(object):
 
             if not parsed:
                 return err_expect in result_string, result_string.replace(
-                    err_expect, TmColor.fg(err_expect, "green"))
+                    err_expect, TColor.highlight(err_expect, "green")
+                )
 
             matched = False
 
             for msg in regex.findall(result_string):
                 result_string = result_string.replace(
-                    msg, TmColor.fg(msg, "green"))
+                    msg, TColor.highlight(msg, "green"))
                 matched = True
 
             return matched, result_string
@@ -120,12 +121,12 @@ class DataMixin(object):
                     {key_name: result[key_name]}).strip("{}")
             except (KeyError, AttributeError, TypeError):
                 check_bool = False
-                result_string = TmColor.fg(result_string, "red")
+                result_string = TColor.highlight(result_string, "red")
             else:
                 result_string = result_string.replace(
                     highlight_value,
-                    TmColor.fg(highlight_value,
-                               "green" if value_match else "red"))
+                    TColor.highlight(highlight_value,
+                                     "green" if value_match else "red"))
 
                 check_bool = check_bool and value_match
 
@@ -447,7 +448,8 @@ if __name__ == "__main__":
     ex = APITester(**config)
 
     order_file = os.path.join(csv_base, "order.csv")
-    resource_name = str(os.path.basename(order_file).split(".")[0].capitalize())
+    resource_name = str(os.path.basename(order_file).split(
+        ".")[0].capitalize())
     resource = getattr(ex, resource_name)
 
     order_list = CSVData(order_file, rec_obj_mixin=(DataMixin, ))
@@ -469,10 +471,10 @@ if __name__ == "__main__":
                 "Return: ".rjust(len(input_string)) +
                 "{}\n".format(highlight_result) +
                 "Result: ".rjust(len(input_string)) +
-                (TmColor.fg("Pass", "green") if passed else
-                 TmColor.fg("Failed", "red"))
+                (TColor.rend("Pass", fg="green") if passed else
+                 TColor.rend("Failed", fg="red"))
         ).replace(
-            "Input", TmColor.fg("Input", "yellow")).replace(
-            "Return", TmColor.fg("Return", "blue")).replace(
-            "Result", TmColor.fg("Result", "cyan"))
+            "Input", TColor.rend("Input", fg="yellow")).replace(
+            "Return", TColor.rend("Return", fg="blue")).replace(
+            "Result", TColor.rend("Result", fg="cyan"))
         )
