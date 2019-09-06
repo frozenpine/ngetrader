@@ -405,23 +405,71 @@ def time_ms():
     return int(time.time() * 1000)
 
 
-class TmColor:
+class TColor:
+    _reset = "\033[0m"
     _colors = {
-        "black": "\033[0;30m", "red": "\033[0;31m", "green": "\033[0;32m",
-        "yellow": "\033[0;33m", "blue": "\033[0;34m", "purple": "\033[0;35m",
-        "cyan": "\033[0;36m", "white": "\033[0;37m", "no_color": "\033[0m",
-        "light_gray": "\033[1;30m", "light_red": "\033[1;31m",
-        "light_green": "\033[1;32m", "light_yellow": "\033[1;33m",
-        "light_blue": "\033[1;34m", "light_purple": "\033[1;35m",
-        "light_cyan": "\033[1;36m", "light_white": "\033[1;37m",
+        "Black": (30, 40),
+        "Red": (31, 41),
+        "Green": (32, 42),
+        "Yellow": (33, 43),
+        "Blue": (34, 44),
+        "Magenta": (35, 45),
+        "Cyan": (36, 46),
+        "White": (37, 47),
+        "Bright Black": (90, 100),
+        "Bright Red": (91, 101),
+        "Bright Green": (92, 102),
+        "Bright Yellow": (93, 103),
+        "Bright Blue": (94, 104),
+        "Bright Magenta": (95, 105),
+        "Bright Cyan": (96, 106),
+        "Bright White": (97, 107)
     }
 
     @staticmethod
-    def list_colors():
-        for name in TmColor._colors.keys():
-            print("{}: {}".format(name, TmColor.fg(name, name)))
+    def _normalize_name(name):
+        return " ".join([n.capitalize() for n in name.split(" ")])
 
     @staticmethod
-    def fg(skk, color):
-        return ("{}{}" + TmColor._colors["no_color"]).format(
-            TmColor._colors[color], skk)
+    def list_colors():
+        for name, (fg, bg) in TColor._colors.items():
+            print("{}: {}".format(name, TColor.rend(name, name)))
+
+    @staticmethod
+    def rend(text, fg=None, bg=None, bold=False):
+        if not fg and not bg:
+            return text
+
+        return ("\033[{}m{}" + TColor._reset).format(
+            ";".join(
+                ["1" if bold else "0"] +
+                ([str(TColor._colors[TColor._normalize_name(fg)][0])]
+                 if fg else []) +
+                ([str(TColor._colors[TColor._normalize_name(bg)][1])]
+                 if bg else [])
+            ),
+            text)
+
+    @staticmethod
+    def regex_rend(pattern, text, fg=None, bg=None, bold=False):
+        if isinstance(pattern, str):
+            pattern = re.compile(pattern)
+
+        for msg in pattern.findall(text):
+            text = text.replace(msg, TColor.rend(msg, fg=fg, bg=bg, bold=bold))
+
+        return text
+
+    @staticmethod
+    def highlight(text, color):
+        return TColor.rend(text=text, fg="bright black", bg=color, bold=True)
+
+    @staticmethod
+    def regex_highlight(pattern, text, color):
+        if isinstance(pattern, str):
+            pattern = re.compile(pattern)
+
+        for msg in pattern.findall(text):
+            text = text.replace(msg, TColor.highlight(msg, color=color))
+
+        return text

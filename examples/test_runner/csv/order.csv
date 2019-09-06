@@ -1,7 +1,7 @@
-action,symbol,side,price,orderQty,params,expect
-Order_new,XBTUSD,Buy,800,1000,,Error:/订单价格低于合约[A-Z]+的价格下限/
-Order_new,XBTUSD,Sell,19900,100,,"ordStatus:New,orderQty:100,price:19900"
-Order_amend,,,,200,orderID:@${last_order}.orderID@,orderQty:200
-Order_cancel,,,,,orderID:@${order_list[1]}.orderID@,ordStatus:Canceled
-Order_new,XBTUSD,Buy,1100,1000,,ordStatus:New
+action,params,expect,symbol,side,price,orderQty
+Order_new,,Error:/订单价格低于合约[A-Z]+的价格下限/,XBTUSD,Buy,800,1000
+Order_new,,"ordStatus:New,orderQty:100,price:19900",XBTUSD,Sell,19900,100
+Order_amend,orderID:@${last_order}.orderID@,orderQty:200,,,,200
+Order_cancel,orderID:@${order_list[1]}.orderID@,ordStatus:Canceled,,,,
+Order_new,,ordStatus:New,XBTUSD,Buy,1100,1000
 Order_cancelAll,,,,,,

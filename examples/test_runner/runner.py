@@ -11,7 +11,7 @@ from bravado.client import ResourceDecorator, CallableOperation
 from bravado.exception import HTTPBadRequest
 
 try:
-    from common.utils import (path, time_ms, TmColor,
+    from common.utils import (path, time_ms, TColor,
                               try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
@@ -19,17 +19,22 @@ except ImportError:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../"))
 
-    from common.utils import (path, time_ms, TmColor,
+    from common.utils import (path, time_ms, TColor,
                               try_parse_num, try_parse_regex)
     from common.data_source import CSVData
     from trade.core import Trader
 
 
 class DataMixin(object):
+    __RESOURCE_MAP = dict()
     __REC_DATA_MAPPER = OrderedDict()
 
     __PARAM_PATTERN = re.compile(r'@.+@')
     __TABLE_PATTERN = re.compile(r'#.+#')
+
+    @staticmethod
+    def register_resource(name, res):
+        DataMixin.__RESOURCE_MAP[name] = res
 
     def link(self, result_data):
         self.__REC_DATA_MAPPER[self] = result_data
@@ -78,7 +83,7 @@ class DataMixin(object):
         return True, result
 
     def highlight_check_result(self):
-        result = self.__REC_DATA_MAPPER.get(self, None)
+        check_bool, result = self.check_result()
 
         result_string = (json.dumps(result, ensure_ascii=False)
                          if isinstance(result, dict) else str(result))
@@ -91,43 +96,20 @@ class DataMixin(object):
         if "Error" in expect:
             err_expect = expect.split(":")[1].strip()
 
-            parsed, regex = try_parse_regex(err_expect)
+            _, regex = try_parse_regex(err_expect)
 
-            if not parsed:
-                return err_expect in result_string, result_string.replace(
-                    err_expect, TmColor.fg(err_expect, "green"))
+            return check_bool, TColor.regex_highlight(
+                regex, text=result_string,
+                color="green" if check_bool else "red")
 
-            matched = False
-
-            for msg in regex.findall(result_string):
-                result_string = result_string.replace(
-                    msg, TmColor.fg(msg, "green"))
-                matched = True
-
-            return matched, result_string
-
-        check_bool = True
-
-        for key_name, expect_value in [
+        for key_name, _ in [
                 [p.strip() for p in exp.strip().split(":")]
                 for exp in expect.split(",")]:
-            _, expect_value = try_parse_num(expect_value)
-
-            try:
-                value_match = expect_value == result[key_name]
-
-                highlight_value = json.dumps(
-                    {key_name: result[key_name]}).strip("{}")
-            except (KeyError, AttributeError, TypeError):
-                check_bool = False
-                result_string = TmColor.fg(result_string, "red")
-            else:
-                result_string = result_string.replace(
-                    highlight_value,
-                    TmColor.fg(highlight_value,
-                               "green" if value_match else "red"))
-
-                check_bool = check_bool and value_match
+            result_string = TColor.regex_highlight(
+                r"""['"]{}['"]: ?[^,}}]+""".format(key_name),
+                text=result_string,
+                color="green" if check_bool else "red"
+            )
 
         return check_bool, result_string
 
@@ -447,8 +429,11 @@ if __name__ == "__main__":
     ex = APITester(**config)
 
     order_file = os.path.join(csv_base, "order.csv")
-    resource_name = str(os.path.basename(order_file).split(".")[0].capitalize())
+    resource_name = str(os.path.basename(order_file).split(
+        ".")[0].capitalize())
     resource = getattr(ex, resource_name)
+    # fixme: to register real resource in exchange object
+    DataMixin.register_resource(resource_name, resource)
 
     order_list = CSVData(order_file, rec_obj_mixin=(DataMixin, ))
 
@@ -469,10 +454,10 @@ if __name__ == "__main__":
                 "Return: ".rjust(len(input_string)) +
                 "{}\n".format(highlight_result) +
                 "Result: ".rjust(len(input_string)) +
-                (TmColor.fg("Pass", "green") if passed else
-                 TmColor.fg("Failed", "red"))
+                (TColor.rend("Pass", fg="green") if passed else
+                 TColor.rend("Failed", fg="red"))
         ).replace(
-            "Input", TmColor.fg("Input", "yellow")).replace(
-            "Return", TmColor.fg("Return", "blue")).replace(
-            "Result", TmColor.fg("Result", "cyan"))
+            "Input", TColor.rend("Input", fg="yellow")).replace(
+            "Return", TColor.rend("Return", fg="blue")).replace(
+            "Result", TColor.rend("Result", fg="cyan"))
         )
