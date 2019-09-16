@@ -432,8 +432,27 @@ class TColor:
 
     @staticmethod
     def list_colors():
-        for name, (fg, bg) in TColor._colors.items():
-            print("{}: {}".format(name, TColor.rend(name, name)))
+        from itertools import product
+
+        name = "TColor"
+        max_len = 0
+
+        for fg, bg in product(TColor._colors.keys(), TColor._colors.keys()):
+            bold_text = "Foreground[{}], Background[{}] in Bold: ".format(
+                fg, bg)
+
+            max_len = max(len(bold_text), max_len)
+
+        for fg, bg in product(TColor._colors.keys(), TColor._colors.keys()):
+            normal_text = "Foreground[{}], Background[{}]: ".format(fg, bg)
+            bold_text = "Foreground[{}], Background[{}] in Bold: ".format(
+                fg, bg)
+
+            print(normal_text.ljust(max_len) +
+                  TColor.rend(name, fg=fg, bg=bg))
+
+            print(bold_text.ljust(max_len) +
+                  TColor.rend(name, fg=fg, bg=bg, bold=True))
 
     @staticmethod
     def rend(text, fg=None, bg=None, bold=False):
