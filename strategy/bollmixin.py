@@ -5,11 +5,11 @@ import numpy as np
 from collections import namedtuple
 from pprint import pprint
 
-from trade.kline import Bar
+from trade.models import Bar
 from strategy import BaseStrategy
 
 
-class Boll:
+class BollMixin:
     BOLL_WIDTH = 20
     BOLL_DEV = 2
 
@@ -35,7 +35,7 @@ class Boll:
                               self._boll_down[-1])
 
 
-class BollTrend(BaseStrategy, Boll):
+class BollTrend(BaseStrategy, BollMixin):
     BOLL_DEV = 1
 
     WMA_WIDTH = 10
@@ -51,10 +51,10 @@ class BollTrend(BaseStrategy, Boll):
         super(BollTrend, self).__init__(host=host, symbol=symbol,
                                         api_key=api_key, api_secret=api_secret,
                                         kline_opts=kline_opts)
-        Boll.__init__(self)
+        BollMixin.__init__(self)
 
     def __open_signal(self, last_price: np.float64,
-                      boll_band: Boll.BAND_TICK,
+                      boll_band: BollMixin.BAND_TICK,
                       wma: np.float64, roc: np.float64):
         if self._position or roc == 0:
             return ""
@@ -100,7 +100,7 @@ class BollTrend(BaseStrategy, Boll):
         return ""
 
     def __close_signal(self, last_price: np.float64,
-                       boll_band: Boll.BAND_TICK,
+                       boll_band: BollMixin.BAND_TICK,
                        wma: np.float64, roc: np.float64):
         if not self._position or roc == 0:
             return ""
@@ -197,6 +197,36 @@ class BollTrend(BaseStrategy, Boll):
             return
 
         self.__judge_action(trade_data)
+
+
+class BollBand(BaseStrategy, BollMixin):
+    BOLL_DEV = 2
+
+    def __init__(self, host="https://www.btcmex.com",
+                 symbol="XBTUSD", api_key="", api_secret="",
+                 kline_opts=None):
+        super(BollBand, self).__init__(host=host, symbol=symbol,
+                                        api_key=api_key, api_secret=api_secret,
+                                        kline_opts=kline_opts)
+        BollMixin.__init__(self)
+
+    def __judge_action(self, trade_data: dict):
+        pass
+
+    def on_bar(self, bar: Bar):
+        super(BollBand, self).on_bar(bar)
+
+        if len(self._close_price) > self.BOLL_WIDTH * 3:
+            self._close_price = self._close_price[
+                                -int(len(self._close_price) / 2):]
+
+        pprint(bar)
+
+    def on_trade(self, trade: dict):
+        if len(self.kline) < self.BOLL_WIDTH:
+            return
+
+        self.__judge_action(trade)
 
 
 if __name__ == "__main__":

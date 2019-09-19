@@ -432,7 +432,6 @@ if __name__ == "__main__":
     resource_name = str(os.path.basename(order_file).split(
         ".")[0].capitalize())
     resource = getattr(ex, resource_name)
-    # fixme: to register real resource in exchange object
     DataMixin.register_resource(resource_name, resource)
 
     order_list = CSVData(order_file, rec_obj_mixin=(DataMixin, ))
