@@ -86,6 +86,9 @@ class NGEWebsocket(object):
                 except RuntimeError:
                     pass
 
+    def join(self, timeout=None):
+        self.wst.join(timeout)
+
     def get_instrument(self):
         """
         Get the raw instrument data for this symbol.

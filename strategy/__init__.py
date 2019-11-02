@@ -4,7 +4,7 @@ import numpy as np
 from abc import abstractmethod
 
 from trade.core import Trader
-from trade.kline import Bar
+from trade.models import Bar
 
 
 class BaseStrategy(Trader):
