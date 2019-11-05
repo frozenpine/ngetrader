@@ -1,6 +1,12 @@
 ---
-host: http://47.103.74.144
-#host: http://192.168.1.23
-symbol: XBTUSD
-api_key: 1B63T5cP9xjc4QVxuwDD
-api_secret: 52QT8279xmFXtKK0X2SMKkcf07yv6e2zb79PGAhy1Hu8Fh1FiQgnK6G1Q2c6aEug936JH536yyLaLAz9b3HcNvj4GYTD5sM02xr
+remote:
+  host: http://47.103.74.144
+  #host: http://192.168.1.23
+  symbol: XBTUSD
+  api_key: 1B63T5cP9xjc4QVxuwDD
+  api_secret: 52QT8279xmFXtKK0X2SMKkcf07yv6e2zb79PGAhy1Hu8Fh1FiQgnK6G1Q2c6aEug936JH536yyLaLAz9b3HcNvj4GYTD5sM02xr
+test:
+  delay: 0.1
+  total: 10000
+  base_price: 10000
+  levels: 50

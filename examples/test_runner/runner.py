@@ -3,6 +3,7 @@ import os
 import yaml
 import re
 import json
+import time
 
 from collections import OrderedDict, namedtuple, ChainMap, UserDict
 from threading import RLock, Condition
@@ -423,12 +424,19 @@ if __name__ == "__main__":
     config_base = path("./config")
     csv_base = path("./csv")
 
+    order_file = os.path.join(csv_base, "order.csv")
+
     with open(os.path.join(config_base, "order_config.yml"), mode='rb') as f:
         config = yaml.safe_load(f)
 
-    ex = APITester(**config)
+    ex = APITester(**config['remote'])
 
-    order_file = os.path.join(csv_base, "order.csv")
+    test_config = config.get('test')
+    test_delay = 0
+
+    if test_config:
+        test_delay = test_config.get('delay', 0)
+
     resource_name = str(os.path.basename(order_file).split(
         ".")[0].capitalize())
     resource = getattr(ex, resource_name)
@@ -438,6 +446,9 @@ if __name__ == "__main__":
 
     for order in order_list:
         order.do_action(resource)
+
+        if test_delay:
+            time.sleep(test_delay)
 
     print()
 

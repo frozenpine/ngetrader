@@ -116,7 +116,7 @@ def link_latency_test(ticker: MarketTicker):
 
 if __name__ == "__main__":
     # environ["https_proxy"] = "http://127.0.0.1:7890"
-    tk = MarketTicker(host="https://www.ybmex.com",
+    tk = MarketTicker(host="http://47.103.74.144",
                       symbol="XBTUSD")
 
     metric_tr = Thread(target=late_summary, args=(tk,))
@@ -127,4 +127,4 @@ if __name__ == "__main__":
     link_tr.daemon = True
     link_tr.start()
 
-    tk.wst.join()
+    tk.join()
