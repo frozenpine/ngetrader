@@ -39,6 +39,6 @@ strict-rfc3339==0.7
 swagger-spec-validator==2.4.3
 TA-Lib==0.4.17
 typing-extensions==3.7.4
-urllib3==1.25.3
+urllib3==1.26.5
 webcolors==1.9.1
 websocket-client==0.56.0
