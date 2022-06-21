@@ -15,7 +15,7 @@ jsonschema==3.0.1
 monotonic==1.5
 msgpack-python==0.5.6
 Naked==0.1.31
-numpy==1.16.4
+numpy==1.22.0
 pyasn1==0.4.5
 pycparser==2.19
 pycryptodome==3.8.2
